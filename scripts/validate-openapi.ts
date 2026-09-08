@@ -106,7 +106,7 @@ export const REQUIRED_ERROR_CODES = [
 ] as const;
 
 /**
- * All 11 Service Token scopes from `packages/contracts/src/v1/common.ts`
+ * All 13 Service Token scopes from `packages/contracts/src/v1/common.ts`
  * `ServiceTokenScope`. The `'*'` wildcard is intentionally excluded — it
  * is session-only and explicitly rejected by the Service Token create
  * endpoint.
@@ -123,6 +123,8 @@ export const REQUIRED_SCOPES = [
   'vaults:write',
   'projects:read',
   'projects:write',
+  'llm:read',
+  'llm:write',
 ] as const;
 
 /** Narrow a JSON value to an object (record) or return undefined. */

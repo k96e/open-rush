@@ -1085,6 +1085,8 @@ components:
         - vaults:write
         - projects:read
         - projects:write
+        - llm:read
+        - llm:write
 
     AgentStatus:
       type: string

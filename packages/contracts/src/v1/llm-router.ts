@@ -182,7 +182,8 @@ export const createLlmProviderRequestSchema = z.object({
   baseUrl: z.string().url(),
   credentialId: z.string().uuid().nullable().optional(),
   defaultHeaders: z.record(z.string(), z.string()).default({}),
-  timeoutMs: z.number().int().positive().max(600_000).default(120_000),
+  /** R4 §5.3：默认 10 分钟——SSE 长流场景下短于 Claude Code 的 300s 字节看门狗会误杀。 */
+  timeoutMs: z.number().int().positive().max(600_000).default(600_000),
   enabled: z.boolean().default(true),
 });
 export type CreateLlmProviderRequest = z.infer<typeof createLlmProviderRequestSchema>;
@@ -230,12 +231,12 @@ export const llmModelSchema = z.object({
 export type LlmModel = z.infer<typeof llmModelSchema>;
 
 export const createLlmModelRequestSchema = z.object({
-  alias: z.string().min(1).max(200),
+  alias: z.string().min(1).max(255),
   providerId: z.string().uuid(),
-  upstreamModel: z.string().min(1).max(200),
+  upstreamModel: z.string().min(1).max(255),
   priority: z.number().int().default(0),
   enabled: z.boolean().default(true),
-  displayName: z.string().max(200).nullable().optional(),
+  displayName: z.string().max(255).nullable().optional(),
   maxOutputTokens: z.number().int().positive().nullable().optional(),
   priceInputPerMtok: decimalString.default('0'),
   priceOutputPerMtok: decimalString.default('0'),
@@ -266,25 +267,54 @@ export type ListLlmModelsResponse = z.infer<typeof listLlmModelsResponseSchema>;
 // /api/v1/llm/budgets
 // ---------------------------------------------------------------------------
 
-export const llmBudgetSchema = z.object({
-  id: z.string().uuid(),
-  /** null = 平台级预算。 */
-  projectId: z.string().uuid().nullable(),
-  mode: llmBudgetModeSchema,
-  /** 累计窗口。 */
-  window: z.enum(['day', 'month']),
-  limitUsd: decimalString,
-  createdAt: z.string().datetime({ offset: true }),
-  updatedAt: z.string().datetime({ offset: true }),
-});
+/**
+ * 预算的作用域。解析时按 `agent → project → user → global` 的优先级取最近的一档。
+ */
+export const llmBudgetSubjectTypeSchema = z.enum(['global', 'project', 'user', 'agent']);
+export type LlmBudgetSubjectType = z.infer<typeof llmBudgetSubjectTypeSchema>;
+
+/** 累计窗口。`total` = 不滚动，自建库以来累计。 */
+export const llmBudgetWindowSchema = z.enum(['day', 'month', 'total']);
+export type LlmBudgetWindow = z.infer<typeof llmBudgetWindowSchema>;
+
+/** `subjectType='global'` 时 `subjectId` 必须为 null；其余三档必须有 id。 */
+function hasConsistentBudgetSubject(v: {
+  subjectType: LlmBudgetSubjectType;
+  subjectId?: string | null;
+}): boolean {
+  return v.subjectType === 'global' ? v.subjectId == null : v.subjectId != null;
+}
+
+const budgetSubjectIssue = {
+  message: 'subjectId must be null for subjectType="global" and set otherwise',
+  path: ['subjectId'] as (string | number)[],
+};
+
+export const llmBudgetSchema = z
+  .object({
+    id: z.string().uuid(),
+    subjectType: llmBudgetSubjectTypeSchema,
+    /** global 时为 null；其余为 project / user / agent 的 id。 */
+    subjectId: z.string().uuid().nullable(),
+    /** `llm_budgets.enforce` 布尔列的 DTO 面：false → observe，true → enforce。 */
+    mode: llmBudgetModeSchema,
+    window: llmBudgetWindowSchema,
+    limitUsd: decimalString,
+    createdAt: z.string().datetime({ offset: true }),
+    updatedAt: z.string().datetime({ offset: true }),
+  })
+  .refine(hasConsistentBudgetSubject, budgetSubjectIssue);
 export type LlmBudget = z.infer<typeof llmBudgetSchema>;
 
-export const putLlmBudgetRequestSchema = z.object({
-  projectId: z.string().uuid().nullable().optional(),
-  mode: llmBudgetModeSchema.default('observe'),
-  window: z.enum(['day', 'month']).default('day'),
-  limitUsd: decimalString,
-});
+export const putLlmBudgetRequestSchema = z
+  .object({
+    subjectType: llmBudgetSubjectTypeSchema.default('global'),
+    subjectId: z.string().uuid().nullable().default(null),
+    mode: llmBudgetModeSchema.default('observe'),
+    window: llmBudgetWindowSchema.default('day'),
+    limitUsd: decimalString,
+  })
+  .refine(hasConsistentBudgetSubject, budgetSubjectIssue);
 export type PutLlmBudgetRequest = z.infer<typeof putLlmBudgetRequestSchema>;
 
 export const putLlmBudgetResponseSchema = successResponseSchema(llmBudgetSchema);

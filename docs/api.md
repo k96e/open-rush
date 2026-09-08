@@ -28,6 +28,7 @@ agents:read             agents:write
 runs:read               runs:write           runs:cancel
 vaults:read             vaults:write
 projects:read           projects:write
+llm:read                llm:write
 ```
 
 Session-authenticated calls implicitly carry `*` and bypass scope checks. Service tokens MUST declare explicit scopes and cannot claim `*`.

@@ -100,8 +100,10 @@ export function paginatedResponseSchema<T extends z.ZodTypeAny>(item: T) {
  * (specs/llm-router.md §契约与 Scope). Note that the platform-level LLM
  * resources (credentials / providers / models) additionally require session
  * auth and reject service tokens outright — same rule as `scope=platform`
- * vault entries — so those two scopes effectively gate the project-level
- * budget/call surfaces.
+ * vault entries — so in practice these two scopes gate the budget and call
+ * surfaces. Which budget subjects (global / project / user / agent) a given
+ * token may reach is a resource-ownership check on top of the scope, not
+ * something the scope decides on its own.
  *
  * Service Tokens MUST use one of these exact values. The `'*'` wildcard is
  * intentionally NOT in this enum — only NextAuth sessions get `'*'`; the

@@ -3,15 +3,27 @@ import {
   createLlmCredentialRequestSchema,
   createLlmCredentialResponseSchema,
   createLlmModelRequestSchema,
+  createLlmModelResponseSchema,
   createLlmProviderRequestSchema,
+  createLlmProviderResponseSchema,
+  deleteLlmCredentialResponseSchema,
+  listLlmBudgetsResponseSchema,
   listLlmCallsQuerySchema,
+  listLlmCallsResponseSchema,
+  listLlmCredentialsQuerySchema,
   listLlmCredentialsResponseSchema,
   listLlmModelsQuerySchema,
+  listLlmModelsResponseSchema,
   listLlmProvidersQuerySchema,
+  listLlmProvidersResponseSchema,
   llmAuthStyleSchema,
   llmBudgetModeSchema,
+  llmBudgetSchema,
+  llmBudgetSubjectTypeSchema,
+  llmBudgetWindowSchema,
   llmCallSchema,
   llmCallStatusSchema,
+  llmCallSubjectTypeSchema,
   llmCredentialSchema,
   llmModelSchema,
   llmProtocolSchema,
@@ -21,7 +33,9 @@ import {
   patchLlmModelRequestSchema,
   patchLlmProviderRequestSchema,
   putLlmBudgetRequestSchema,
+  putLlmBudgetResponseSchema,
   rotateLlmCredentialRequestSchema,
+  rotateLlmCredentialResponseSchema,
 } from '../llm-router.js';
 
 const credential = {
@@ -64,6 +78,17 @@ const model = {
   priceCacheWritePerMtok: '3.75',
   priceCacheReadPerMtok: '0.30',
   priceReasoningPerMtok: '0',
+  createdAt: '2026-04-28T00:00:00Z',
+  updatedAt: '2026-04-28T00:00:00Z',
+};
+
+const budget = {
+  id: '00000000-0000-0000-0000-000000000064',
+  subjectType: 'project' as const,
+  subjectId: '00000000-0000-0000-0000-000000000002',
+  mode: 'enforce' as const,
+  window: 'month' as const,
+  limitUsd: '250.000000',
   createdAt: '2026-04-28T00:00:00Z',
   updatedAt: '2026-04-28T00:00:00Z',
 };
@@ -115,6 +140,19 @@ describe('enums', () => {
     expect(llmAuthStyleSchema.safeParse('basic').success).toBe(false);
     expect(llmBudgetModeSchema.options).toEqual(['observe', 'enforce']);
     expect(llmBudgetModeSchema.safeParse('block').success).toBe(false);
+  });
+
+  it('llmCallSubjectTypeSchema carries exactly run/service', () => {
+    expect(llmCallSubjectTypeSchema.options).toEqual(['run', 'service']);
+    expect(llmCallSubjectTypeSchema.parse('service')).toBe('service');
+    expect(llmCallSubjectTypeSchema.safeParse('user').success).toBe(false);
+  });
+
+  it('llmBudgetSubjectTypeSchema / llmBudgetWindowSchema match the budget table', () => {
+    expect(llmBudgetSubjectTypeSchema.options).toEqual(['global', 'project', 'user', 'agent']);
+    expect(llmBudgetWindowSchema.options).toEqual(['day', 'month', 'total']);
+    expect(llmBudgetSubjectTypeSchema.safeParse('team').success).toBe(false);
+    expect(llmBudgetWindowSchema.safeParse('week').success).toBe(false);
   });
 
   it('llmCallStatusSchema covers every row of the error-code table', () => {
@@ -270,7 +308,7 @@ describe('provider contracts', () => {
       protocol: 'openai',
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     });
-    expect(parsed).toMatchObject({ defaultHeaders: {}, timeoutMs: 120_000, enabled: true });
+    expect(parsed).toMatchObject({ defaultHeaders: {}, timeoutMs: 600_000, enabled: true });
   });
 
   it('patch accepts a single field but rejects an empty body', () => {
@@ -327,16 +365,66 @@ describe('model contracts', () => {
 });
 
 describe('budget contracts', () => {
-  it('defaults to observe/day', () => {
-    const parsed = putLlmBudgetRequestSchema.parse({ limitUsd: '10.00' });
-    expect(parsed).toMatchObject({ mode: 'observe', window: 'day' });
+  it('accepts a project-scoped budget row', () => {
+    expect(llmBudgetSchema.parse(budget).subjectType).toBe('project');
   });
 
-  it('rejects an unknown window and a non-decimal limit', () => {
+  it('accepts a global budget row with a null subjectId', () => {
+    const parsed = llmBudgetSchema.parse({
+      ...budget,
+      subjectType: 'global',
+      subjectId: null,
+      window: 'total',
+    });
+    expect(parsed.subjectId).toBeNull();
+  });
+
+  it('rejects a global budget carrying a subjectId', () => {
+    const r = llmBudgetSchema.safeParse({ ...budget, subjectType: 'global' });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.path).toEqual(['subjectId']);
+  });
+
+  it('rejects a non-global budget without a subjectId', () => {
+    expect(llmBudgetSchema.safeParse({ ...budget, subjectId: null }).success).toBe(false);
+  });
+
+  it('rejects an unknown window and a non-decimal limit on the row', () => {
+    expect(llmBudgetSchema.safeParse({ ...budget, window: 'week' }).success).toBe(false);
+    expect(llmBudgetSchema.safeParse({ ...budget, limitUsd: '250 USD' }).success).toBe(false);
+  });
+
+  it('put defaults to a global observe/day budget', () => {
+    const parsed = putLlmBudgetRequestSchema.parse({ limitUsd: '10.00' });
+    expect(parsed).toEqual({
+      subjectType: 'global',
+      subjectId: null,
+      mode: 'observe',
+      window: 'day',
+      limitUsd: '10.00',
+    });
+  });
+
+  it('put accepts every subject tier', () => {
+    for (const subjectType of ['project', 'user', 'agent'] as const) {
+      expect(
+        putLlmBudgetRequestSchema.parse({
+          subjectType,
+          subjectId: budget.subjectId,
+          limitUsd: '1',
+        }).subjectType
+      ).toBe(subjectType);
+    }
+  });
+
+  it('put rejects an unknown window, a non-decimal limit and a subject mismatch', () => {
     expect(putLlmBudgetRequestSchema.safeParse({ limitUsd: '10', window: 'week' }).success).toBe(
       false
     );
     expect(putLlmBudgetRequestSchema.safeParse({ limitUsd: 'ten' }).success).toBe(false);
+    expect(
+      putLlmBudgetRequestSchema.safeParse({ subjectType: 'project', limitUsd: '10' }).success
+    ).toBe(false);
   });
 });
 
@@ -372,5 +460,55 @@ describe('call contracts', () => {
     expect(parsed.runId).toBe(call.runId);
     expect(listLlmCallsQuerySchema.safeParse({ from: 'last-week' }).success).toBe(false);
     expect(listLlmCallsQuerySchema.safeParse({ limit: '0' }).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Envelope wrappers — thin successResponseSchema / paginatedResponseSchema
+// re-wraps. The factories themselves are covered in common.test.ts; this
+// table just proves each exported wrapper is bound to the right payload.
+// ---------------------------------------------------------------------------
+
+describe('response envelopes', () => {
+  it.each([
+    ['createLlmProviderResponseSchema', createLlmProviderResponseSchema, provider],
+    ['createLlmModelResponseSchema', createLlmModelResponseSchema, model],
+    ['putLlmBudgetResponseSchema', putLlmBudgetResponseSchema, budget],
+    ['rotateLlmCredentialResponseSchema', rotateLlmCredentialResponseSchema, credential],
+  ])('%s accepts { data } and rejects a mismatched payload', (_name, schema, payload) => {
+    expect(schema.parse({ data: payload }).data).toBeDefined();
+    expect(schema.safeParse({ data: { id: 'nope' } }).success).toBe(false);
+    expect(schema.safeParse(payload).success).toBe(false);
+  });
+
+  it.each([
+    ['listLlmProvidersResponseSchema', listLlmProvidersResponseSchema, provider],
+    ['listLlmModelsResponseSchema', listLlmModelsResponseSchema, model],
+    ['listLlmBudgetsResponseSchema', listLlmBudgetsResponseSchema, budget],
+    ['listLlmCallsResponseSchema', listLlmCallsResponseSchema, call],
+  ])('%s accepts a page and rejects a missing nextCursor', (_name, schema, payload) => {
+    expect(schema.parse({ data: [payload], nextCursor: null }).data).toHaveLength(1);
+    expect(schema.safeParse({ data: [payload] }).success).toBe(false);
+    expect(schema.safeParse({ data: payload, nextCursor: null }).success).toBe(false);
+  });
+
+  it('deleteLlmCredentialResponseSchema pins deleted:true', () => {
+    expect(
+      deleteLlmCredentialResponseSchema.parse({ data: { id: credential.id, deleted: true } }).data
+        .deleted
+    ).toBe(true);
+    expect(
+      deleteLlmCredentialResponseSchema.safeParse({ data: { id: credential.id, deleted: false } })
+        .success
+    ).toBe(false);
+  });
+
+  it('listLlmCredentialsQuerySchema is the shared pagination query', () => {
+    expect(listLlmCredentialsQuerySchema.parse({}).limit).toBe(50);
+    expect(listLlmCredentialsQuerySchema.parse({ limit: '5', cursor: 'abc' })).toEqual({
+      limit: 5,
+      cursor: 'abc',
+    });
+    expect(listLlmCredentialsQuerySchema.safeParse({ limit: '999' }).success).toBe(false);
   });
 });

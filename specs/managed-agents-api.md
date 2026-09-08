@@ -263,6 +263,7 @@ control-worker 注入的 `data-openrush-*` 扩展事件走同一 EventStore,共�
 - `runs:read` / `runs:write` / `runs:cancel`
 - `vaults:read` / `vaults:write`
 - `projects:read` / `projects:write`
+- `llm:read` / `llm:write`(LLM Router 的预算与调用明细面;见 specs/llm-router.md)
 - `*`(仅 session 自动拥有,Service Token **禁止声明**)
 
 Session 鉴权默认 `scopes = ['*']`(立场 A,无 RBAC);Service Token 必须显式声明 scopes。

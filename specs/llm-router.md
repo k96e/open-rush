@@ -90,7 +90,13 @@ control-worker ──SSE①── agent-worker ── Claude Code CLI ──▶ 
 
 1. **`llm_credentials` 没有任何明文列**，也不存在能把密文解回明文的对称密钥落在 web / control-plane 侧。
 2. `sealed_value` 由 apps/web 用 `LLM_ROUTER_PUBLIC_KEY` **单向封装**；对应私钥只存在于 llm-router 进程内存，web 侧**物理上无法解封**。
-3. `/api/v1/llm/credentials` 的任何响应**永不包含** `sealed_value` 或明文 `value`——这一条在契约层就被封死：`llmCredentialSchema` 结构上没有这两个键（`packages/contracts/src/v1/llm-router.ts`）。
+3. `/api/v1/llm/credentials` 的任何响应**永不包含** `sealed_value` 或明文 `value`。
+   契约层是**类型层**的第一道闸门：`llmCredentialSchema` 结构上没有这两个键
+   （`packages/contracts/src/v1/llm-router.ts`），但它**不会自动作用于响应体**——
+   `v1Success<T>(data: T)` 是无约束泛型，不跑 schema。所以运行时的保证由两件事承担，
+   M2·T2.3 必须同时做到：① 路由用显式投影函数 `credentialToV1()` 构造响应
+   （范式见 `/api/v1/vaults/entries` 的 `entryToV1()`，同样是手写投影挡住 `encryptedValue`）；
+   ② `route.test.ts` 断言真实响应体里检索不到 `sealedValue` / `value`。
 4. 轮换 = 覆盖 `sealed_value` + `version++` + `rotated_at=now()`，**不保留历史密文**（保证"旧密钥不可从持久层还原"）。
 
 明文供应商 key 的**唯一**允许出现位置：llm-router 进程内存，且只在单次转发的调用栈上流转，用完置空；不进任何缓存、日志、响应。web / control-worker / agent-worker / 沙箱 env / DB / 日志 / 响应体，一处都不得有。
@@ -186,7 +192,7 @@ const providerEnv: Record<string, string | undefined> = {
 
 - llm-router 逐调用写 `llm_calls`：subject（来自令牌）、alias、协议、模式、token 四类计数、`cost_usd`、TTFB、总耗时、状态。**异步批写，失败只记日志不阻塞转发。**
 - control-worker 在 run 收敛时聚合 `llm_calls` 回写 `data-openrush-usage` 事件——该事件的 zod schema 早已存在于 `packages/contracts/src/v1/runs.ts`，但在本课题之前**没有任何生产者**。所以这是"从零到有"，不是升级。
-- 预算：`llm_budget_usage` DB 累计器 + 进程内缓存，两档开关 `observe`（只记不拦）/ `enforce`（拦截）。
+- 预算：`llm_budgets`（作用域 `global` / `project` / `user` / `agent`，窗口 `day` / `month` / `total`）+ `llm_budget_usage` DB 累计器 + 进程内缓存，两档开关 `observe`（只记不拦）/ `enforce`（拦截）。作用域解析优先级 `agent → project → user → global`，取最近的一档。
 - 限流：复用 `packages/agent-runtime` 的 `RedisRateLimiter`（Redis Lua 滑动窗口，多副本共享），key = subject。
 - 两个开关**互相独立**：限流开/预算关、限流关/预算开都必须各自正确。
 
@@ -208,7 +214,7 @@ const providerEnv: Record<string, string | undefined> = {
 - 类型契约：`packages/contracts/src/v1/llm-router.ts`（zod **v3** API，仓库锁定 `zod@3.25.76`）。
 - `ServiceTokenScope` 追加 `llm:read` / `llm:write`（同步更新 `specs/service-token-auth.md` 的 scope 矩阵）。
 - 控制台 API 面 `/api/v1/llm/*` 沿用既有 v1 规范：`authenticate()` + `hasScope()` + `v1Success` / `v1Error` / `v1Paginated`。
-- **平台级资源限制**：`credentials` / `providers` / `models` 无 `projectId`，属平台级，按仓库既有惯例（见 `/api/v1/vaults/entries` 对 `scope=platform` 的处理）**仅接受 session 认证，拒绝 service token**。`llm:read` / `llm:write` 因此主要服务于项目级的 `budgets` / `calls` 查询面。
+- **平台级资源限制**：`credentials` / `providers` / `models` 无 `projectId`，属平台级，按仓库既有惯例（见 `/api/v1/vaults/entries` 对 `scope=platform` 的处理）**仅接受 session 认证，拒绝 service token**。`llm:read` / `llm:write` 因此服务于 `budgets` / `calls` 这两个面——注意预算本身有 `global` / `project` / `user` / `agent` 四档作用域（见 §计量、预算、限流），不是只有项目级；service token 能读写哪几档，由 M5 的资源归属校验决定，不由 scope 单独决定。
 
 ---
 

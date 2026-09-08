@@ -1,9 +1,26 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const DRIZZLE_DIR = resolve(import.meta.dirname, '../../drizzle');
+
+/** 在一个干净的 PGlite 实例上重放全链 migration。 */
+async function replayAllMigrations(pg: PGlite): Promise<void> {
+  const files = readdirSync(DRIZZLE_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  for (const file of files) {
+    const sqlContent = readFileSync(resolve(DRIZZLE_DIR, file), 'utf-8');
+    const statements = sqlContent
+      .split('--> statement-breakpoint')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const stmt of statements) {
+      await pg.exec(stmt);
+    }
+  }
+}
 
 describe('migration files', () => {
   it('drizzle directory exists', () => {
@@ -73,6 +90,15 @@ describe('migration replay on clean database', () => {
     expect(tables).toContain('vault_entries');
     expect(tables).toContain('agent_definition_versions');
     expect(tables).toContain('service_tokens');
+    // 0012_llm_router.sql —— 7 张 llm_* 表
+    expect(tables).toContain('llm_credentials');
+    expect(tables).toContain('llm_providers');
+    expect(tables).toContain('llm_models');
+    expect(tables).toContain('llm_router_tokens');
+    expect(tables).toContain('llm_calls');
+    expect(tables).toContain('llm_budgets');
+    expect(tables).toContain('llm_budget_usage');
+    expect(tables).toContain('llm_catalog_state');
   });
 
   it('service_tokens partial active index exists with correct predicate', async () => {
@@ -221,5 +247,224 @@ describe('migration replay on clean database', () => {
     } finally {
       await pg.close();
     }
+  });
+});
+
+describe('0012_llm_router migration', () => {
+  let pg: PGlite;
+
+  beforeAll(async () => {
+    pg = new PGlite();
+    await replayAllMigrations(pg);
+  }, 60000);
+
+  afterAll(async () => {
+    await pg?.close();
+  });
+
+  it('seeds llm_catalog_state with exactly one row at version 0', async () => {
+    const result = await pg.query<{ id: number; version: string }>(
+      'SELECT id, version FROM llm_catalog_state'
+    );
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].id).toBe(1);
+    expect(Number(result.rows[0].version)).toBe(0);
+  });
+
+  it('0012 really ends with the seed INSERT, and replaying it is idempotent', () => {
+    // 从文件里把种子语句抠出来再执行——否则这个用例会自己插一行，
+    // 于是「migration 里的种子被删掉」也照样绿。
+    const migration = readFileSync(resolve(DRIZZLE_DIR, '0012_llm_router.sql'), 'utf-8');
+    const statements = migration
+      .split('--> statement-breakpoint')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const seed = statements[statements.length - 1];
+
+    expect(seed).toMatch(/INSERT INTO "llm_catalog_state"/);
+    expect(seed).toMatch(/VALUES\s*\(1,\s*0\)/);
+    expect(seed).toMatch(/ON CONFLICT \("id"\) DO NOTHING/);
+  });
+
+  it('replaying the migration seed statement does not duplicate the row', async () => {
+    const migration = readFileSync(resolve(DRIZZLE_DIR, '0012_llm_router.sql'), 'utf-8');
+    const statements = migration
+      .split('--> statement-breakpoint')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    await pg.exec(statements[statements.length - 1]);
+
+    const result = await pg.query('SELECT id FROM llm_catalog_state');
+    expect(result.rows).toHaveLength(1);
+  });
+
+  it('llm_catalog_state_singleton rejects a second row', async () => {
+    await expect(
+      pg.exec(`INSERT INTO llm_catalog_state (id, version) VALUES (2, 5)`)
+    ).rejects.toThrow();
+
+    const result = await pg.query('SELECT id FROM llm_catalog_state');
+    expect(result.rows).toHaveLength(1);
+  });
+
+  it('the budget tables pin subject_type / window to the contract enums', async () => {
+    await expect(
+      pg.exec(
+        `INSERT INTO llm_budgets (subject_type, subject_id, "window", limit_usd)
+         VALUES ('Global', NULL, 'day', 1)`
+      )
+    ).rejects.toThrow();
+
+    await expect(
+      pg.exec(
+        `INSERT INTO llm_budgets (subject_type, subject_id, "window", limit_usd)
+         VALUES ('global', NULL, 'weekly', 1)`
+      )
+    ).rejects.toThrow();
+
+    await expect(
+      pg.exec(
+        `INSERT INTO llm_budget_usage (subject_type, subject_id, window_key)
+         VALUES ('Global', NULL, 'total')`
+      )
+    ).rejects.toThrow();
+  });
+
+  it('llm_credentials pins auth_style and requires auth_header for the header style', async () => {
+    await expect(
+      pg.exec(
+        `INSERT INTO llm_credentials (name, key_id, sealed_value, auth_style)
+         VALUES ('bogus-style', 'k', 's', 'bogus')`
+      )
+    ).rejects.toThrow();
+
+    await expect(
+      pg.exec(
+        `INSERT INTO llm_credentials (name, key_id, sealed_value, auth_style)
+         VALUES ('header-no-header', 'k', 's', 'header')`
+      )
+    ).rejects.toThrow();
+  });
+
+  it('every llm_* table has a primary key (logical replication needs one)', async () => {
+    const result = await pg.query<{ tbl: string }>(
+      `SELECT c.conrelid::regclass::text AS tbl
+       FROM pg_constraint c
+       WHERE c.contype = 'p' AND c.conrelid::regclass::text LIKE 'llm\\_%'
+       ORDER BY tbl`
+    );
+
+    expect(result.rows.map((r) => r.tbl)).toEqual([
+      'llm_budget_usage',
+      'llm_budgets',
+      'llm_calls',
+      'llm_catalog_state',
+      'llm_credentials',
+      'llm_models',
+      'llm_providers',
+      'llm_router_tokens',
+    ]);
+  });
+
+  it('llm_credentials carries no plaintext column', async () => {
+    const result = await pg.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'llm_credentials'`
+    );
+    const columns = result.rows.map((r) => r.column_name);
+
+    expect(columns).toContain('sealed_value');
+    expect(columns).not.toContain('value');
+    expect(columns).not.toContain('plaintext');
+  });
+
+  it('llm_router_tokens_subject_check rejects a run token without a run_id', async () => {
+    await expect(
+      pg.exec(
+        `INSERT INTO llm_router_tokens (token_hash, subject_type, expires_at)
+         VALUES ('deadbeef', 'run', now() + interval '30 minutes')`
+      )
+    ).rejects.toThrow();
+  });
+
+  it('llm_providers_protocol_check rejects an unknown protocol', async () => {
+    await expect(
+      pg.exec(
+        `INSERT INTO llm_providers (name, protocol, base_url)
+         VALUES ('bedrock', 'aws-bedrock', 'https://bedrock.example.com')`
+      )
+    ).rejects.toThrow();
+  });
+
+  it('the budget unique indexes are NULLS NOT DISTINCT', async () => {
+    const result = await pg.query<{ indexname: string; nulls_not_distinct: boolean }>(
+      `SELECT c.relname AS indexname, i.indnullsnotdistinct AS nulls_not_distinct
+       FROM pg_index i
+       JOIN pg_class c ON c.oid = i.indexrelid
+       WHERE c.relname IN ('llm_budgets_subject_window_idx', 'llm_budget_usage_subject_window_uniq')
+       ORDER BY c.relname`
+    );
+
+    expect(result.rows).toHaveLength(2);
+    for (const row of result.rows) {
+      expect(row.nulls_not_distinct).toBe(true);
+    }
+  });
+
+  it('so a second global/day budget collides instead of silently duplicating', async () => {
+    await pg.exec(
+      `INSERT INTO llm_budgets (subject_type, subject_id, "window", limit_usd)
+       VALUES ('global', NULL, 'day', 100)`
+    );
+
+    await expect(
+      pg.exec(
+        `INSERT INTO llm_budgets (subject_type, subject_id, "window", limit_usd)
+         VALUES ('global', NULL, 'day', 250)`
+      )
+    ).rejects.toThrow();
+
+    const rows = await pg.query(`SELECT id FROM llm_budgets WHERE subject_type = 'global'`);
+    expect(rows.rows).toHaveLength(1);
+  });
+
+  it('llm_calls indexes cover the run / project / session / status drill-downs', async () => {
+    const result = await pg.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef FROM pg_indexes
+       WHERE schemaname = 'public' AND tablename = 'llm_calls'`
+    );
+    const byName = new Map(result.rows.map((r) => [r.indexname, r.indexdef]));
+
+    // 断到列上——只断名字的话，把 llm_calls_run_idx 建到 cc_agent_id 上也能绿。
+    expect(byName.get('llm_calls_run_idx')).toMatch(/\(run_id, started_at\)/);
+    expect(byName.get('llm_calls_project_started_idx')).toMatch(/\(project_id, started_at\)/);
+    expect(byName.get('llm_calls_session_idx')).toMatch(/\(cc_session_id\)/);
+    expect(byName.get('llm_calls_status_idx')).toMatch(/\(status, started_at\)/);
+    // 覆盖 token_id 外键，避免删 run 级联时对本表做全表扫描
+    expect(byName.get('llm_calls_token_idx')).toMatch(/\(token_id\)/);
+  });
+
+  it('llm_router_tokens indexes cover both cascading foreign keys', async () => {
+    const result = await pg.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef FROM pg_indexes
+       WHERE schemaname = 'public' AND tablename = 'llm_router_tokens'`
+    );
+    const byName = new Map(result.rows.map((r) => [r.indexname, r.indexdef]));
+
+    expect(byName.get('llm_router_tokens_run_idx')).toMatch(/\(run_id\)/);
+    expect(byName.get('llm_router_tokens_project_idx')).toMatch(/\(project_id\)/);
+  });
+
+  it('llm_router_tokens active index keeps the revoked_at IS NULL predicate', async () => {
+    const result = await pg.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef FROM pg_indexes
+       WHERE schemaname = 'public' AND tablename = 'llm_router_tokens'`
+    );
+    const active = result.rows.find((r) => r.indexname === 'llm_router_tokens_active_idx');
+
+    expect(active).toBeDefined();
+    expect(active?.indexdef).toMatch(/revoked_at IS NULL/i);
   });
 });

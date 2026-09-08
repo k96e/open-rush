@@ -97,12 +97,58 @@ describe('llm_credentials', () => {
       `SELECT column_name FROM information_schema.columns
        WHERE table_schema = 'public' AND table_name = 'llm_credentials'`
     );
-    const columns = result.rows.map((r) => r.column_name);
+    const columns = result.rows.map((r) => r.column_name).sort();
 
-    expect(columns).toContain('sealed_value');
-    expect(columns).not.toContain('value');
-    expect(columns).not.toContain('plaintext');
-    expect(columns).not.toContain('encrypted_value');
+    // 断言**完整列集**而不是几个禁用名：任何新增列都要在这里做一次显式决定，
+    // 否则一个叫 api_key / raw / secret 的列会从禁用名单底下溜过去。
+    expect(columns).toEqual([
+      'alg',
+      'auth_header',
+      'auth_style',
+      'created_at',
+      'created_by',
+      'id',
+      'key_id',
+      'name',
+      'rotated_at',
+      'sealed_value',
+      'updated_at',
+      'version',
+    ]);
+  });
+
+  it('rejects an auth_style outside the contract enum', async () => {
+    await expect(
+      db.insert(llmCredentials).values({
+        name: 'bad-style',
+        keyId: 'k'.repeat(32),
+        sealedValue: 'c2VhbGVk',
+        authStyle: 'bogus',
+      })
+    ).rejects.toThrow();
+  });
+
+  it('requires authHeader when authStyle is "header"', async () => {
+    await expect(
+      db.insert(llmCredentials).values({
+        name: 'header-style',
+        keyId: 'k'.repeat(32),
+        sealedValue: 'c2VhbGVk',
+        authStyle: 'header',
+      })
+    ).rejects.toThrow();
+
+    const [ok] = await db
+      .insert(llmCredentials)
+      .values({
+        name: 'header-style',
+        keyId: 'k'.repeat(32),
+        sealedValue: 'c2VhbGVk',
+        authStyle: 'header',
+        authHeader: 'X-Api-Token',
+      })
+      .returning();
+    expect(ok.authHeader).toBe('X-Api-Token');
   });
 
   it('rejects a duplicate name', async () => {
@@ -310,6 +356,18 @@ describe('llm_router_tokens', () => {
     ).rejects.toThrow();
   });
 
+  it('rejects an unknown subject_type — both disjuncts of the check evaluate false', async () => {
+    const { runId } = await seedRun();
+    await expect(
+      db.insert(llmRouterTokens).values({
+        tokenHash: hashToken(makeRawToken()),
+        subjectType: 'bogus',
+        runId,
+        expiresAt: futureDate(),
+      })
+    ).rejects.toThrow();
+  });
+
   it('allows subject_type="service" without a run_id', async () => {
     const [token] = await db
       .insert(llmRouterTokens)
@@ -440,7 +498,7 @@ describe('llm_calls', () => {
     expect(call.latencyMs).toBe(4200);
   });
 
-  it('records cc_* header hints without letting them become attribution', async () => {
+  it('round-trips attribution and cc_* hint columns as separate fields', async () => {
     const { runId, agentId, projectId } = await seedRun();
     const call = await insertCall({
       runId,
@@ -450,7 +508,8 @@ describe('llm_calls', () => {
       ccAgentId: 'agent-from-header',
     });
 
-    // 归属来自令牌（run/agent/project），cc_* 只是分组提示（D6）
+    // 归属列与 cc_* 提示列互不覆盖。「header 不能成为归属」是 M4 写入侧的不变量，
+    // 这里只证明两组列在表上是分开的（D6 的数据模型前提）。
     expect(call.runId).toBe(runId);
     expect(call.agentId).toBe(agentId);
     expect(call.projectId).toBe(projectId);
@@ -539,6 +598,20 @@ describe('llm_budgets', () => {
     ).rejects.toThrow();
   });
 
+  it('rejects a subject_type or window outside the contract enums', async () => {
+    await expect(
+      db
+        .insert(llmBudgets)
+        .values({ subjectType: 'Global', subjectId: null, window: 'day', limitUsd: '1.000000' })
+    ).rejects.toThrow();
+
+    await expect(
+      db
+        .insert(llmBudgets)
+        .values({ subjectType: 'global', subjectId: null, window: 'weekly', limitUsd: '1.000000' })
+    ).rejects.toThrow();
+  });
+
   it('keeps windows independent for the same subject', async () => {
     const subjectId = randomUUID();
     await db.insert(llmBudgets).values([
@@ -574,6 +647,14 @@ describe('llm_budget_usage', () => {
       });
   }
 
+  it('rejects a subject_type outside the contract enum', async () => {
+    await expect(
+      db
+        .insert(llmBudgetUsage)
+        .values({ subjectType: 'Global', subjectId: null, windowKey: 'total' })
+    ).rejects.toThrow();
+  });
+
   it('accumulates on the composite key instead of inserting a second row', async () => {
     const projectId = randomUUID();
     await accumulate('project', projectId, '2026-09-08', '0.010000', 100);
@@ -605,6 +686,24 @@ describe('llm_budget_usage', () => {
     await accumulate('global', null, 'total', '0.010000', 100);
 
     expect(await db.select().from(llmBudgetUsage)).toHaveLength(4);
+  });
+
+  it('needs isNull() to read the global row — eq(col, null) never matches', async () => {
+    await accumulate('global', null, 'total', '0.010000', 100);
+
+    const viaIsNull = await db
+      .select()
+      .from(llmBudgetUsage)
+      .where(isNull(llmBudgetUsage.subjectId));
+    const viaEq = await db
+      .select()
+      .from(llmBudgetUsage)
+      .where(eq(llmBudgetUsage.subjectId, sql`NULL`));
+
+    // 写侧的 ON CONFLICT 认 NULL（NULLS NOT DISTINCT），读侧的 `=` 不认。
+    // M5 的 BudgetService 读全局档必须用 isNull()，否则会静默读到 0 行。
+    expect(viaIsNull).toHaveLength(1);
+    expect(viaEq).toHaveLength(0);
   });
 
   it('defaults cost/tokens/calls to zero on a bare insert', async () => {
@@ -647,7 +746,9 @@ describe('llm_catalog_state', () => {
     expect(await db.select().from(llmCatalogState)).toHaveLength(1);
   });
 
-  it('refuses a second row — the version bit is single-row by construction', async () => {
-    await expect(db.insert(llmCatalogState).values({ id: 1, version: 99 })).rejects.toThrow();
+  it('refuses a second row — the singleton check, not just the primary key', async () => {
+    // id=2 是关键用例：主键只挡得住重复的 id=1，挡不住「表里有两行」。
+    await expect(db.insert(llmCatalogState).values({ id: 2, version: 99 })).rejects.toThrow();
+    expect(await db.select().from(llmCatalogState)).toHaveLength(1);
   });
 });

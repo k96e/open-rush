@@ -1,4 +1,14 @@
-import { index, integer, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import {
+  check,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 import { users } from './users.js';
 
 /**
@@ -35,5 +45,18 @@ export const llmCredentials = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     rotatedAt: timestamp('rotated_at', { withTimezone: true }),
   },
-  (t) => [index('llm_credentials_key_id_idx').on(t.keyId)]
+  (t) => [
+    index('llm_credentials_key_id_idx').on(t.keyId),
+    // 与 contracts 的 `llmAuthStyleSchema` 对齐。DB 侧也拦一道：配错的凭据
+    // 否则要到 llm-router 转发那一刻才炸，那是最坏的发现时机。
+    check(
+      'llm_credentials_auth_style_check',
+      sql`${t.authStyle} IN ('bearer','x-api-key','header')`
+    ),
+    // 对应 `createLlmCredentialRequestSchema` 的 refine：authStyle='header' 必须带 authHeader。
+    check(
+      'llm_credentials_auth_header_check',
+      sql`${t.authStyle} <> 'header' OR ${t.authHeader} IS NOT NULL`
+    ),
+  ]
 );

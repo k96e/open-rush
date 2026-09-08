@@ -77,5 +77,8 @@ export const llmCalls = pgTable(
     index('llm_calls_project_started_idx').on(t.projectId, t.startedAt),
     index('llm_calls_session_idx').on(t.ccSessionId),
     index('llm_calls_status_idx').on(t.status, t.startedAt),
+    // 覆盖 token_id 外键：删 run 会级联删 llm_router_tokens，PG 随后要把本表
+    // （全库最大的一张）里的 token_id 置 NULL——没有这个索引就是一次全表扫描。
+    index('llm_calls_token_idx').on(t.tokenId),
   ]
 );

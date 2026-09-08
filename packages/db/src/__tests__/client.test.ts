@@ -86,6 +86,12 @@ describe('createNotificationListener', () => {
     await expect(listener.close()).resolves.toBeUndefined();
   });
 
+  it('close() never rejects, so a failed end() cannot poison later calls', async () => {
+    const listener = createNotificationListener('postgresql://rush:rush@127.0.0.1:1/rush');
+    await expect(listener.close()).resolves.toBeUndefined();
+    await expect(listener.close()).resolves.toBeUndefined();
+  });
+
   it('refuses to listen after close', async () => {
     const listener = createNotificationListener('postgresql://rush:rush@127.0.0.1:1/rush');
     await listener.close();

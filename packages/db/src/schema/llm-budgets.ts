@@ -1,6 +1,8 @@
+import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  check,
   integer,
   numeric,
   pgTable,
@@ -38,6 +40,14 @@ export const llmBudgets = pgTable(
     unique('llm_budgets_subject_window_idx')
       .on(t.subjectType, t.subjectId, t.window)
       .nullsNotDistinct(),
+    // 本表与 llm_budget_usage 之间没有外键，只靠 (subject_type, window) 约定对齐。
+    // 一个大小写或拼写差异就会生出一行永远撞不到限额、也永远不报错的影子累计器，
+    // 所以两侧的 subject_type 都在 DB 里锁死到契约枚举。
+    check(
+      'llm_budgets_subject_type_check',
+      sql`${t.subjectType} IN ('global','project','user','agent')`
+    ),
+    check('llm_budgets_window_check', sql`${t.window} IN ('day','month','total')`),
   ]
 );
 
@@ -51,10 +61,19 @@ export const llmBudgets = pgTable(
  * PRIMARY KEY 隐含 NOT NULL，而 `subject_type = 'global'` 的行
  * `subject_id` 必须为 NULL（与 `llm_budgets` 和 v1 契约保持同一套语义）。
  * 唯一约束同样能作为 ON CONFLICT 的推断目标，累加语义不变。
+ * 另配一个代理主键 `id`：其余 6 张 llm_* 表都有主键，而无主键表在逻辑复制下
+ * 连 UPDATE 都做不了——一张只有 UPDATE 的累计器表尤其不该踩这个坑
+ * （`subject_id` 可空，唯一索引也无法用 REPLICA IDENTITY USING INDEX 顶上）。
+ *
+ * ⚠️ 读取 global 行必须用 `isNull(subjectId)`：`eq(col, null)` 生成
+ * `WHERE subject_id = NULL`，SQL 里恒不匹配。写侧的 ON CONFLICT 认 NULL、
+ * 读侧的 `=` 不认，这是本表唯一的非对称之处。
  */
 export const llmBudgetUsage = pgTable(
   'llm_budget_usage',
   {
+    /** 代理主键——累加靠下面的唯一约束，不靠它。 */
+    id: uuid('id').defaultRandom().primaryKey(),
     subjectType: varchar('subject_type', { length: 20 }).notNull(),
     subjectId: uuid('subject_id'),
     /** 'day' → '2026-09-08'；'month' → '2026-09'；'total' → 'total'（UTC） */
@@ -68,5 +87,9 @@ export const llmBudgetUsage = pgTable(
     unique('llm_budget_usage_subject_window_uniq')
       .on(t.subjectType, t.subjectId, t.windowKey)
       .nullsNotDistinct(),
+    check(
+      'llm_budget_usage_subject_type_check',
+      sql`${t.subjectType} IN ('global','project','user','agent')`
+    ),
   ]
 );

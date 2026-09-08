@@ -55,6 +55,8 @@ export const llmRouterTokens = pgTable(
     uniqueIndex('llm_router_tokens_hash_uniq').on(t.tokenHash),
     index('llm_router_tokens_active_idx').on(t.tokenHash).where(sql`${t.revokedAt} IS NULL`),
     index('llm_router_tokens_run_idx').on(t.runId),
+    // 覆盖 project_id 外键（ON DELETE CASCADE），与 agents_project_id_idx 同理。
+    index('llm_router_tokens_project_idx').on(t.projectId),
     check(
       'llm_router_tokens_subject_check',
       sql`(${t.subjectType} = 'run' AND ${t.runId} IS NOT NULL) OR ${t.subjectType} = 'service'`

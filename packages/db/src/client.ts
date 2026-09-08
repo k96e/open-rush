@@ -62,7 +62,7 @@ export function getDbClient(connectionString?: string): DbClient {
 export interface NotificationListener {
   /** 订阅一个 channel。断线后 postgres.js 会自动重连并重新订阅。 */
   listen(channel: string, onNotify: (payload: string) => void): Promise<void>;
-  /** 关闭连接。多次调用是安全的（幂等）。 */
+  /** 关闭连接。幂等，且**永不 reject**——关闭期的错误无从补救，只会掩盖真正的失败原因。 */
   close(): Promise<void>;
 }
 
@@ -75,6 +75,11 @@ export interface NotificationListener {
  *
  * 连接是惰性的——本函数只构造句柄，真正建连发生在首次 `listen()`。
  * `idle_timeout: 0` 表示不因空闲断开：监听连接大部分时间都是空闲的。
+ *
+ * ⚠️ `listen()` 失败（例如启动时 DB 不可达）不会自动收摊：postgres.js 的重连
+ * 循环仍在跑。**调用方在失败路径上也要负责 `close()`**——C3 §7.6 的
+ * `CatalogCache.start()` 把 listen 的 rejection 吞成一条 warn，若不显式关闭，
+ * 一个对着挂掉的 DB 启动的副本会一直挂着这条重连中的孤儿连接。
  */
 export function createNotificationListener(connectionString?: string): NotificationListener {
   const url = connectionString || process.env.DATABASE_URL;
@@ -94,7 +99,9 @@ export function createNotificationListener(connectionString?: string): Notificat
     },
     async close(): Promise<void> {
       // 幂等：重复 close() 复用同一个 Promise，不会向已关闭的连接再发一次 end。
-      closing ??= sql.end({ timeout: 5 });
+      // 吞掉 end() 的错误——否则被记住的 rejection 会让之后每一次 close() 都抛，
+      // 与「多次调用安全」自相矛盾。
+      closing ??= sql.end({ timeout: 5 }).catch(() => undefined);
       await closing;
     },
   };

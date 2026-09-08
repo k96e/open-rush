@@ -7,8 +7,10 @@ export type TestDb = ReturnType<typeof drizzle<typeof schema>>;
 
 const TABLE_NAMES = [
   'versions',
-  // llm-router（specs/llm-router.md）。`llm_catalog_state` 刻意不在列表里——
-  // 它是 migration 播下的单行种子，生产环境不会被清空，测试里也应保持存在。
+  // llm-router（specs/llm-router.md）。`llm_catalog_state` 也在列表里：
+  // truncateAll() 清空后立刻按 migration 的种子重新播一行，这样「版本位存在且为 0」
+  // 是每个用例的起点，不依赖用例执行顺序（vitest 可以打乱顺序跑）。
+  'llm_catalog_state',
   'llm_calls',
   'llm_budget_usage',
   'llm_budgets',
@@ -435,6 +437,11 @@ async function applySchema(db: TestDb): Promise<void> {
   `);
 
   // ── llm-router（0012_llm_router.sql）─────────────────────────────────────
+  //
+  // 注意：这里用内联的 UNIQUE / REFERENCES，PG 会自动命名（`*_key` / `*_fkey`），
+  // 与 migration 里 drizzle 的显式命名（`*_unique` / `*_fk`）不同——**只镜像定义，
+  // 不镜像约束名**，与本文件其余表的写法一致。要断言约束名的测试请走
+  // migration.test.ts（那边是真的重放 migration）。
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS llm_credentials (
@@ -449,7 +456,11 @@ async function applySchema(db: TestDb): Promise<void> {
       created_by UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      rotated_at TIMESTAMPTZ
+      rotated_at TIMESTAMPTZ,
+      CONSTRAINT llm_credentials_auth_style_check
+        CHECK (auth_style IN ('bearer','x-api-key','header')),
+      CONSTRAINT llm_credentials_auth_header_check
+        CHECK (auth_style <> 'header' OR auth_header IS NOT NULL)
     )
   `);
   await db.execute(sql`
@@ -531,6 +542,9 @@ async function applySchema(db: TestDb): Promise<void> {
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS llm_router_tokens_run_idx ON llm_router_tokens (run_id)
   `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS llm_router_tokens_project_idx ON llm_router_tokens (project_id)
+  `);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS llm_calls (
@@ -579,6 +593,9 @@ async function applySchema(db: TestDb): Promise<void> {
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS llm_calls_status_idx ON llm_calls (status, started_at)
   `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS llm_calls_token_idx ON llm_calls (token_id)
+  `);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS llm_budgets (
@@ -591,12 +608,17 @@ async function applySchema(db: TestDb): Promise<void> {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       CONSTRAINT llm_budgets_subject_window_idx
-        UNIQUE NULLS NOT DISTINCT (subject_type, subject_id, "window")
+        UNIQUE NULLS NOT DISTINCT (subject_type, subject_id, "window"),
+      CONSTRAINT llm_budgets_subject_type_check
+        CHECK (subject_type IN ('global','project','user','agent')),
+      CONSTRAINT llm_budgets_window_check
+        CHECK ("window" IN ('day','month','total'))
     )
   `);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS llm_budget_usage (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       subject_type VARCHAR(20) NOT NULL,
       subject_id UUID,
       window_key VARCHAR(20) NOT NULL,
@@ -605,7 +627,9 @@ async function applySchema(db: TestDb): Promise<void> {
       calls INTEGER NOT NULL DEFAULT 0,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       CONSTRAINT llm_budget_usage_subject_window_uniq
-        UNIQUE NULLS NOT DISTINCT (subject_type, subject_id, window_key)
+        UNIQUE NULLS NOT DISTINCT (subject_type, subject_id, window_key),
+      CONSTRAINT llm_budget_usage_subject_type_check
+        CHECK (subject_type IN ('global','project','user','agent'))
     )
   `);
 
@@ -613,14 +637,13 @@ async function applySchema(db: TestDb): Promise<void> {
     CREATE TABLE IF NOT EXISTS llm_catalog_state (
       id INTEGER PRIMARY KEY DEFAULT 1,
       version BIGINT NOT NULL DEFAULT 0,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT llm_catalog_state_singleton CHECK (id = 1)
     )
   `);
   // 与 0012_llm_router.sql 末尾的种子 INSERT 对齐——单行表必须先有那一行，
   // 目录版本位才能被 UPDATE … version + 1 撞上。
-  await db.execute(sql`
-    INSERT INTO llm_catalog_state (id, version) VALUES (1, 0) ON CONFLICT (id) DO NOTHING
-  `);
+  await seedLlmCatalogState(db);
 
   // Versions
   await db.execute(sql`
@@ -644,6 +667,14 @@ async function applySchema(db: TestDb): Promise<void> {
 
 export async function truncateAll(db: TestDb): Promise<void> {
   await db.execute(sql.raw(`TRUNCATE TABLE ${TABLE_NAMES.join(', ')} CASCADE`));
+  await seedLlmCatalogState(db);
+}
+
+/** 与 0012_llm_router.sql 末尾的种子 INSERT 等价——单行版本位必须先存在。 */
+async function seedLlmCatalogState(db: TestDb): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO llm_catalog_state (id, version) VALUES (1, 0) ON CONFLICT (id) DO NOTHING
+  `);
 }
 
 export async function closeTestDb(pglite: PGlite): Promise<void> {

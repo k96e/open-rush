@@ -1,5 +1,5 @@
 {
-  "id": "9516632a-cbbb-4a51-9cc2-8e139c9bdab2",
+  "id": "b4e8784e-c606-4afb-9ef1-3a21d8ca3353",
   "prevId": "2bf5ddf4-55d9-4208-9d72-cd21e1509acb",
   "version": "7",
   "dialect": "postgresql",
@@ -661,6 +661,13 @@
       "name": "llm_budget_usage",
       "schema": "",
       "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
         "subject_type": {
           "name": "subject_type",
           "type": "varchar(20)",
@@ -719,7 +726,12 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "llm_budget_usage_subject_type_check": {
+          "name": "llm_budget_usage_subject_type_check",
+          "value": "\"llm_budget_usage\".\"subject_type\" IN ('global','project','user','agent')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.llm_budgets": {
@@ -790,7 +802,16 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "llm_budgets_subject_type_check": {
+          "name": "llm_budgets_subject_type_check",
+          "value": "\"llm_budgets\".\"subject_type\" IN ('global','project','user','agent')"
+        },
+        "llm_budgets_window_check": {
+          "name": "llm_budgets_window_check",
+          "value": "\"llm_budgets\".\"window\" IN ('day','month','total')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.llm_calls": {
@@ -1065,6 +1086,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "llm_calls_token_idx": {
+          "name": "llm_calls_token_idx",
+          "columns": [
+            {
+              "expression": "token_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -1124,7 +1160,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "llm_catalog_state_singleton": {
+          "name": "llm_catalog_state_singleton",
+          "value": "\"llm_catalog_state\".\"id\" = 1"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.llm_credentials": {
@@ -1247,7 +1288,16 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "llm_credentials_auth_style_check": {
+          "name": "llm_credentials_auth_style_check",
+          "value": "\"llm_credentials\".\"auth_style\" IN ('bearer','x-api-key','header')"
+        },
+        "llm_credentials_auth_header_check": {
+          "name": "llm_credentials_auth_header_check",
+          "value": "\"llm_credentials\".\"auth_style\" <> 'header' OR \"llm_credentials\".\"auth_header\" IS NOT NULL"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.llm_models": {
@@ -1652,6 +1702,21 @@
           "columns": [
             {
               "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "llm_router_tokens_project_idx": {
+          "name": "llm_router_tokens_project_idx",
+          "columns": [
+            {
+              "expression": "project_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

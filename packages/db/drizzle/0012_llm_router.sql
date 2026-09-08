@@ -1,4 +1,5 @@
 CREATE TABLE "llm_budget_usage" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"subject_type" varchar(20) NOT NULL,
 	"subject_id" uuid,
 	"window_key" varchar(20) NOT NULL,
@@ -6,7 +7,8 @@ CREATE TABLE "llm_budget_usage" (
 	"tokens" bigint DEFAULT 0 NOT NULL,
 	"calls" integer DEFAULT 0 NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "llm_budget_usage_subject_window_uniq" UNIQUE NULLS NOT DISTINCT("subject_type","subject_id","window_key")
+	CONSTRAINT "llm_budget_usage_subject_window_uniq" UNIQUE NULLS NOT DISTINCT("subject_type","subject_id","window_key"),
+	CONSTRAINT "llm_budget_usage_subject_type_check" CHECK ("llm_budget_usage"."subject_type" IN ('global','project','user','agent'))
 );
 --> statement-breakpoint
 CREATE TABLE "llm_budgets" (
@@ -18,7 +20,9 @@ CREATE TABLE "llm_budgets" (
 	"enforce" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "llm_budgets_subject_window_idx" UNIQUE NULLS NOT DISTINCT("subject_type","subject_id","window")
+	CONSTRAINT "llm_budgets_subject_window_idx" UNIQUE NULLS NOT DISTINCT("subject_type","subject_id","window"),
+	CONSTRAINT "llm_budgets_subject_type_check" CHECK ("llm_budgets"."subject_type" IN ('global','project','user','agent')),
+	CONSTRAINT "llm_budgets_window_check" CHECK ("llm_budgets"."window" IN ('day','month','total'))
 );
 --> statement-breakpoint
 CREATE TABLE "llm_calls" (
@@ -57,7 +61,8 @@ CREATE TABLE "llm_calls" (
 CREATE TABLE "llm_catalog_state" (
 	"id" integer PRIMARY KEY DEFAULT 1 NOT NULL,
 	"version" bigint DEFAULT 0 NOT NULL,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "llm_catalog_state_singleton" CHECK ("llm_catalog_state"."id" = 1)
 );
 --> statement-breakpoint
 CREATE TABLE "llm_credentials" (
@@ -73,7 +78,9 @@ CREATE TABLE "llm_credentials" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"rotated_at" timestamp with time zone,
-	CONSTRAINT "llm_credentials_name_unique" UNIQUE("name")
+	CONSTRAINT "llm_credentials_name_unique" UNIQUE("name"),
+	CONSTRAINT "llm_credentials_auth_style_check" CHECK ("llm_credentials"."auth_style" IN ('bearer','x-api-key','header')),
+	CONSTRAINT "llm_credentials_auth_header_check" CHECK ("llm_credentials"."auth_style" <> 'header' OR "llm_credentials"."auth_header" IS NOT NULL)
 );
 --> statement-breakpoint
 CREATE TABLE "llm_models" (
@@ -141,12 +148,15 @@ CREATE INDEX "llm_calls_run_idx" ON "llm_calls" USING btree ("run_id","started_a
 CREATE INDEX "llm_calls_project_started_idx" ON "llm_calls" USING btree ("project_id","started_at");--> statement-breakpoint
 CREATE INDEX "llm_calls_session_idx" ON "llm_calls" USING btree ("cc_session_id");--> statement-breakpoint
 CREATE INDEX "llm_calls_status_idx" ON "llm_calls" USING btree ("status","started_at");--> statement-breakpoint
+CREATE INDEX "llm_calls_token_idx" ON "llm_calls" USING btree ("token_id");--> statement-breakpoint
 CREATE INDEX "llm_credentials_key_id_idx" ON "llm_credentials" USING btree ("key_id");--> statement-breakpoint
 CREATE INDEX "llm_models_alias_enabled_idx" ON "llm_models" USING btree ("alias","enabled","priority");--> statement-breakpoint
 CREATE INDEX "llm_providers_enabled_idx" ON "llm_providers" USING btree ("enabled");--> statement-breakpoint
 CREATE UNIQUE INDEX "llm_router_tokens_hash_uniq" ON "llm_router_tokens" USING btree ("token_hash");--> statement-breakpoint
 CREATE INDEX "llm_router_tokens_active_idx" ON "llm_router_tokens" USING btree ("token_hash") WHERE "llm_router_tokens"."revoked_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "llm_router_tokens_run_idx" ON "llm_router_tokens" USING btree ("run_id");--> statement-breakpoint
--- llm_catalog_state 是单行表（id 恒为 1），种子行必须手写——drizzle 不生成 DML。
+CREATE INDEX "llm_router_tokens_project_idx" ON "llm_router_tokens" USING btree ("project_id");--> statement-breakpoint
+-- llm_catalog_state 是单行表（id 恒为 1，由 llm_catalog_state_singleton 约束强制），
+-- 种子行必须手写——drizzle 不生成 DML。
 -- 目录热变更（D7）依赖这一行存在：写方在事务内 version++，提交后 pg_notify('llm_catalog', version)。
 INSERT INTO "llm_catalog_state" ("id", "version") VALUES (1, 0) ON CONFLICT ("id") DO NOTHING;

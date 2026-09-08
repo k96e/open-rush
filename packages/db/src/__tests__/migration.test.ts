@@ -1,9 +1,26 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const DRIZZLE_DIR = resolve(import.meta.dirname, '../../drizzle');
+
+/** 在一个干净的 PGlite 实例上重放全链 migration。 */
+async function replayAllMigrations(pg: PGlite): Promise<void> {
+  const files = readdirSync(DRIZZLE_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  for (const file of files) {
+    const sqlContent = readFileSync(resolve(DRIZZLE_DIR, file), 'utf-8');
+    const statements = sqlContent
+      .split('--> statement-breakpoint')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const stmt of statements) {
+      await pg.exec(stmt);
+    }
+  }
+}
 
 describe('migration files', () => {
   it('drizzle directory exists', () => {
@@ -73,6 +90,15 @@ describe('migration replay on clean database', () => {
     expect(tables).toContain('vault_entries');
     expect(tables).toContain('agent_definition_versions');
     expect(tables).toContain('service_tokens');
+    // 0012_llm_router.sql —— 7 张 llm_* 表
+    expect(tables).toContain('llm_credentials');
+    expect(tables).toContain('llm_providers');
+    expect(tables).toContain('llm_models');
+    expect(tables).toContain('llm_router_tokens');
+    expect(tables).toContain('llm_calls');
+    expect(tables).toContain('llm_budgets');
+    expect(tables).toContain('llm_budget_usage');
+    expect(tables).toContain('llm_catalog_state');
   });
 
   it('service_tokens partial active index exists with correct predicate', async () => {
@@ -221,5 +247,123 @@ describe('migration replay on clean database', () => {
     } finally {
       await pg.close();
     }
+  });
+});
+
+describe('0012_llm_router migration', () => {
+  let pg: PGlite;
+
+  beforeAll(async () => {
+    pg = new PGlite();
+    await replayAllMigrations(pg);
+  }, 60000);
+
+  afterAll(async () => {
+    await pg?.close();
+  });
+
+  it('seeds llm_catalog_state with exactly one row at version 0', async () => {
+    const result = await pg.query<{ id: number; version: string }>(
+      'SELECT id, version FROM llm_catalog_state'
+    );
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].id).toBe(1);
+    expect(Number(result.rows[0].version)).toBe(0);
+  });
+
+  it('the seed INSERT is idempotent — replaying it does not duplicate the row', async () => {
+    await pg.exec(
+      `INSERT INTO "llm_catalog_state" ("id", "version") VALUES (1, 0) ON CONFLICT ("id") DO NOTHING`
+    );
+
+    const result = await pg.query('SELECT id FROM llm_catalog_state');
+    expect(result.rows).toHaveLength(1);
+  });
+
+  it('llm_credentials carries no plaintext column', async () => {
+    const result = await pg.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'llm_credentials'`
+    );
+    const columns = result.rows.map((r) => r.column_name);
+
+    expect(columns).toContain('sealed_value');
+    expect(columns).not.toContain('value');
+    expect(columns).not.toContain('plaintext');
+  });
+
+  it('llm_router_tokens_subject_check rejects a run token without a run_id', async () => {
+    await expect(
+      pg.exec(
+        `INSERT INTO llm_router_tokens (token_hash, subject_type, expires_at)
+         VALUES ('deadbeef', 'run', now() + interval '30 minutes')`
+      )
+    ).rejects.toThrow();
+  });
+
+  it('llm_providers_protocol_check rejects an unknown protocol', async () => {
+    await expect(
+      pg.exec(
+        `INSERT INTO llm_providers (name, protocol, base_url)
+         VALUES ('bedrock', 'aws-bedrock', 'https://bedrock.example.com')`
+      )
+    ).rejects.toThrow();
+  });
+
+  it('the budget unique indexes are NULLS NOT DISTINCT', async () => {
+    const result = await pg.query<{ indexname: string; nulls_not_distinct: boolean }>(
+      `SELECT c.relname AS indexname, i.indnullsnotdistinct AS nulls_not_distinct
+       FROM pg_index i
+       JOIN pg_class c ON c.oid = i.indexrelid
+       WHERE c.relname IN ('llm_budgets_subject_window_idx', 'llm_budget_usage_subject_window_uniq')
+       ORDER BY c.relname`
+    );
+
+    expect(result.rows).toHaveLength(2);
+    for (const row of result.rows) {
+      expect(row.nulls_not_distinct).toBe(true);
+    }
+  });
+
+  it('so a second global/day budget collides instead of silently duplicating', async () => {
+    await pg.exec(
+      `INSERT INTO llm_budgets (subject_type, subject_id, "window", limit_usd)
+       VALUES ('global', NULL, 'day', 100)`
+    );
+
+    await expect(
+      pg.exec(
+        `INSERT INTO llm_budgets (subject_type, subject_id, "window", limit_usd)
+         VALUES ('global', NULL, 'day', 250)`
+      )
+    ).rejects.toThrow();
+
+    const rows = await pg.query(`SELECT id FROM llm_budgets WHERE subject_type = 'global'`);
+    expect(rows.rows).toHaveLength(1);
+  });
+
+  it('llm_calls indexes cover the run / project / session / status drill-downs', async () => {
+    const result = await pg.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes
+       WHERE schemaname = 'public' AND tablename = 'llm_calls'`
+    );
+    const names = result.rows.map((r) => r.indexname);
+
+    expect(names).toContain('llm_calls_run_idx');
+    expect(names).toContain('llm_calls_project_started_idx');
+    expect(names).toContain('llm_calls_session_idx');
+    expect(names).toContain('llm_calls_status_idx');
+  });
+
+  it('llm_router_tokens active index keeps the revoked_at IS NULL predicate', async () => {
+    const result = await pg.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef FROM pg_indexes
+       WHERE schemaname = 'public' AND tablename = 'llm_router_tokens'`
+    );
+    const active = result.rows.find((r) => r.indexname === 'llm_router_tokens_active_idx');
+
+    expect(active).toBeDefined();
+    expect(active?.indexdef).toMatch(/revoked_at IS NULL/i);
   });
 });

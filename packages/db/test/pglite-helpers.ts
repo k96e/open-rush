@@ -7,6 +7,15 @@ export type TestDb = ReturnType<typeof drizzle<typeof schema>>;
 
 const TABLE_NAMES = [
   'versions',
+  // llm-router（specs/llm-router.md）。`llm_catalog_state` 刻意不在列表里——
+  // 它是 migration 播下的单行种子，生产环境不会被清空，测试里也应保持存在。
+  'llm_calls',
+  'llm_budget_usage',
+  'llm_budgets',
+  'llm_router_tokens',
+  'llm_models',
+  'llm_providers',
+  'llm_credentials',
   'vault_entries',
   'conversations',
   'artifacts',
@@ -423,6 +432,194 @@ async function applySchema(db: TestDb): Promise<void> {
   await db.execute(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS vault_entries_platform_name_uniq
     ON vault_entries (scope, name) WHERE project_id IS NULL
+  `);
+
+  // ── llm-router（0012_llm_router.sql）─────────────────────────────────────
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS llm_credentials (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(100) NOT NULL UNIQUE,
+      alg VARCHAR(40) NOT NULL DEFAULT 'x25519-hkdf-sha256-aes256gcm',
+      key_id VARCHAR(64) NOT NULL,
+      sealed_value TEXT NOT NULL,
+      auth_style VARCHAR(20) NOT NULL DEFAULT 'bearer',
+      auth_header VARCHAR(64),
+      version INTEGER NOT NULL DEFAULT 1,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      rotated_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS llm_credentials_key_id_idx ON llm_credentials (key_id)
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS llm_providers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(100) NOT NULL UNIQUE,
+      protocol VARCHAR(20) NOT NULL,
+      base_url TEXT NOT NULL,
+      credential_id UUID REFERENCES llm_credentials(id) ON DELETE RESTRICT,
+      default_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+      timeout_ms INTEGER NOT NULL DEFAULT 600000,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT llm_providers_protocol_check CHECK (protocol IN ('anthropic','openai'))
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS llm_providers_enabled_idx ON llm_providers (enabled)
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS llm_models (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      alias VARCHAR(255) NOT NULL,
+      provider_id UUID NOT NULL REFERENCES llm_providers(id) ON DELETE CASCADE,
+      upstream_model VARCHAR(255) NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 0,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      display_name VARCHAR(255),
+      max_output_tokens INTEGER,
+      price_input_per_mtok NUMERIC(12, 6) NOT NULL DEFAULT '0',
+      price_output_per_mtok NUMERIC(12, 6) NOT NULL DEFAULT '0',
+      price_cache_write_per_mtok NUMERIC(12, 6) NOT NULL DEFAULT '0',
+      price_cache_read_per_mtok NUMERIC(12, 6) NOT NULL DEFAULT '0',
+      price_reasoning_per_mtok NUMERIC(12, 6) NOT NULL DEFAULT '0',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT llm_models_alias_provider_idx UNIQUE (alias, provider_id)
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS llm_models_alias_enabled_idx
+    ON llm_models (alias, enabled, priority)
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS llm_router_tokens (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      token_hash TEXT NOT NULL,
+      subject_type VARCHAR(20) NOT NULL,
+      run_id UUID REFERENCES runs(id) ON DELETE CASCADE,
+      agent_id UUID REFERENCES agents(id) ON DELETE SET NULL,
+      project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+      owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      allowed_model_aliases JSONB NOT NULL DEFAULT '[]'::jsonb,
+      max_cost_usd NUMERIC(12, 6),
+      max_requests_per_minute INTEGER,
+      expires_at TIMESTAMPTZ NOT NULL,
+      revoked_at TIMESTAMPTZ,
+      last_used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT llm_router_tokens_subject_check
+        CHECK ((subject_type = 'run' AND run_id IS NOT NULL) OR subject_type = 'service')
+    )
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS llm_router_tokens_hash_uniq
+    ON llm_router_tokens (token_hash)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS llm_router_tokens_active_idx
+    ON llm_router_tokens (token_hash) WHERE revoked_at IS NULL
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS llm_router_tokens_run_idx ON llm_router_tokens (run_id)
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS llm_calls (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      request_id VARCHAR(64),
+      token_id UUID REFERENCES llm_router_tokens(id) ON DELETE SET NULL,
+      subject_type VARCHAR(20) NOT NULL,
+      run_id UUID REFERENCES runs(id) ON DELETE CASCADE,
+      agent_id UUID,
+      project_id UUID,
+      owner_user_id UUID,
+      cc_session_id VARCHAR(128),
+      cc_agent_id VARCHAR(128),
+      model_alias VARCHAR(255) NOT NULL,
+      provider_id UUID,
+      upstream_model VARCHAR(255),
+      protocol VARCHAR(20) NOT NULL,
+      mode VARCHAR(20) NOT NULL,
+      stream BOOLEAN NOT NULL DEFAULT false,
+      status VARCHAR(30) NOT NULL,
+      http_status INTEGER,
+      error_code VARCHAR(50),
+      tokens_in INTEGER NOT NULL DEFAULT 0,
+      tokens_cache_write INTEGER NOT NULL DEFAULT 0,
+      tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+      tokens_out INTEGER NOT NULL DEFAULT 0,
+      tokens_reasoning INTEGER NOT NULL DEFAULT 0,
+      cost_usd NUMERIC(12, 6) NOT NULL DEFAULT '0',
+      ttfb_ms INTEGER,
+      latency_ms INTEGER,
+      started_at TIMESTAMPTZ NOT NULL,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS llm_calls_run_idx ON llm_calls (run_id, started_at)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS llm_calls_project_started_idx
+    ON llm_calls (project_id, started_at)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS llm_calls_session_idx ON llm_calls (cc_session_id)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS llm_calls_status_idx ON llm_calls (status, started_at)
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS llm_budgets (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subject_type VARCHAR(20) NOT NULL,
+      subject_id UUID,
+      "window" VARCHAR(20) NOT NULL,
+      limit_usd NUMERIC(12, 6) NOT NULL,
+      enforce BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT llm_budgets_subject_window_idx
+        UNIQUE NULLS NOT DISTINCT (subject_type, subject_id, "window")
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS llm_budget_usage (
+      subject_type VARCHAR(20) NOT NULL,
+      subject_id UUID,
+      window_key VARCHAR(20) NOT NULL,
+      cost_usd NUMERIC(14, 6) NOT NULL DEFAULT '0',
+      tokens BIGINT NOT NULL DEFAULT 0,
+      calls INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT llm_budget_usage_subject_window_uniq
+        UNIQUE NULLS NOT DISTINCT (subject_type, subject_id, window_key)
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS llm_catalog_state (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      version BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  // 与 0012_llm_router.sql 末尾的种子 INSERT 对齐——单行表必须先有那一行，
+  // 目录版本位才能被 UPDATE … version + 1 撞上。
+  await db.execute(sql`
+    INSERT INTO llm_catalog_state (id, version) VALUES (1, 0) ON CONFLICT (id) DO NOTHING
   `);
 
   // Versions

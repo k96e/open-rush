@@ -1,5 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import {
   agents,
+  llmCredentials,
+  llmModels,
+  llmProviders,
   projectMembers,
   projects,
   runEvents,
@@ -108,4 +112,80 @@ export async function createTestRunEvent(
     })
     .returning();
   return event;
+}
+
+// ---------------------------------------------------------------------------
+// llm-router（specs/llm-router.md）
+// ---------------------------------------------------------------------------
+
+/**
+ * 一条盲写凭据。`sealedValue` 在测试里是任意 base64——本层不解封，
+ * 解封只发生在 llm-router 进程内（M2）。
+ */
+export async function createTestLlmCredential(
+  db: TestDb,
+  overrides?: { name?: string; keyId?: string; createdBy?: string | null }
+) {
+  const [credential] = await db
+    .insert(llmCredentials)
+    .values({
+      name: overrides?.name ?? `cred-${randomUUID().slice(0, 8)}`,
+      keyId: overrides?.keyId ?? 'a'.repeat(32),
+      sealedValue: Buffer.from(`sealed-${randomUUID()}`).toString('base64'),
+      createdBy: overrides?.createdBy ?? null,
+    })
+    .returning();
+  return credential;
+}
+
+export async function createTestLlmProvider(
+  db: TestDb,
+  overrides?: {
+    name?: string;
+    protocol?: 'anthropic' | 'openai';
+    baseUrl?: string;
+    credentialId?: string | null;
+    enabled?: boolean;
+  }
+) {
+  const [provider] = await db
+    .insert(llmProviders)
+    .values({
+      name: overrides?.name ?? `provider-${randomUUID().slice(0, 8)}`,
+      protocol: overrides?.protocol ?? 'anthropic',
+      baseUrl: overrides?.baseUrl ?? 'https://api.anthropic.com',
+      credentialId: overrides?.credentialId ?? null,
+      enabled: overrides?.enabled ?? true,
+    })
+    .returning();
+  return provider;
+}
+
+/** 默认 `alias === upstreamModel`，即 D2b 的字节级零改写（passthrough）。 */
+export async function createTestLlmModel(
+  db: TestDb,
+  providerId: string,
+  overrides?: {
+    alias?: string;
+    upstreamModel?: string;
+    priority?: number;
+    enabled?: boolean;
+    priceInputPerMtok?: string;
+    priceOutputPerMtok?: string;
+  }
+) {
+  const alias = overrides?.alias ?? 'claude-opus-4';
+  const [model] = await db
+    .insert(llmModels)
+    .values({
+      alias,
+      providerId,
+      upstreamModel: overrides?.upstreamModel ?? alias,
+      priority: overrides?.priority ?? 0,
+      enabled: overrides?.enabled ?? true,
+      priceInputPerMtok: overrides?.priceInputPerMtok ?? '0',
+      priceOutputPerMtok: overrides?.priceOutputPerMtok ?? '0',
+    })
+    .returning();
+  return model;
 }

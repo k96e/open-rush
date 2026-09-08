@@ -152,7 +152,7 @@ describe('paginatedResponseSchema', () => {
 });
 
 describe('ServiceTokenScope + AuthScope', () => {
-  it('ServiceTokenScope has all 11 values from spec matrix', () => {
+  it('ServiceTokenScope has all 13 values from spec matrix', () => {
     const expected = [
       'agent-definitions:read',
       'agent-definitions:write',
@@ -165,10 +165,13 @@ describe('ServiceTokenScope + AuthScope', () => {
       'vaults:write',
       'projects:read',
       'projects:write',
+      'llm:read',
+      'llm:write',
     ];
     for (const s of expected) {
       expect(ServiceTokenScope.parse(s)).toBe(s);
     }
+    expect(ServiceTokenScope.options).toEqual(expected);
   });
 
   it('ServiceTokenScope explicitly rejects "*"', () => {

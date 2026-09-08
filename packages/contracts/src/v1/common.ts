@@ -96,6 +96,13 @@ export function paginatedResponseSchema<T extends z.ZodTypeAny>(item: T) {
 /**
  * Scopes allowed for Service Tokens.
  *
+ * `llm:read` / `llm:write` cover the `/api/v1/llm/*` console surface
+ * (specs/llm-router.md §契约与 Scope). Note that the platform-level LLM
+ * resources (credentials / providers / models) additionally require session
+ * auth and reject service tokens outright — same rule as `scope=platform`
+ * vault entries — so those two scopes effectively gate the project-level
+ * budget/call surfaces.
+ *
  * Service Tokens MUST use one of these exact values. The `'*'` wildcard is
  * intentionally NOT in this enum — only NextAuth sessions get `'*'`; the
  * Service Token POST endpoint rejects `'*'` in the scopes array with 400.
@@ -112,6 +119,8 @@ export const ServiceTokenScope = z.enum([
   'vaults:write',
   'projects:read',
   'projects:write',
+  'llm:read',
+  'llm:write',
 ]);
 export type ServiceTokenScope = z.infer<typeof ServiceTokenScope>;
 

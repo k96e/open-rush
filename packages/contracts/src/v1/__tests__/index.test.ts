@@ -36,6 +36,15 @@ describe('v1 barrel export', () => {
     expect(typeof v1.getProjectResponseSchema).toBe('object');
   });
 
+  it('re-exports LLM router schemas', () => {
+    expect(typeof v1.createLlmCredentialRequestSchema).toBe('object');
+    expect(typeof v1.llmCredentialSchema).toBe('object');
+    expect(typeof v1.llmProviderSchema).toBe('object');
+    expect(typeof v1.llmModelSchema).toBe('object');
+    expect(typeof v1.llmCallSchema).toBe('object');
+    expect(typeof v1.listLlmCallsQuerySchema).toBe('object');
+  });
+
   it('re-exports Open-rush extension event part schemas (4)', () => {
     expect(typeof v1.openrushRunStartedPartSchema).toBe('object');
     expect(typeof v1.openrushRunDonePartSchema).toBe('object');

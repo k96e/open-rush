@@ -185,6 +185,16 @@ export async function POST(req: Request) {
 | /api/v1/projects | POST | `projects:write` |
 | /api/v1/projects | GET | `projects:read` |
 | /api/v1/projects/:id | GET | `projects:read` |
+| /api/v1/llm/credentials | POST / GET | **session-only**(平台级资源,拒绝 service token) |
+| /api/v1/llm/credentials/:id | DELETE | **session-only**(同上) |
+| /api/v1/llm/credentials/:id/rotate | POST | **session-only**(同上) |
+| /api/v1/llm/providers | POST / GET | **session-only**(同上) |
+| /api/v1/llm/providers/:id | PATCH / DELETE | **session-only**(同上) |
+| /api/v1/llm/models | POST / GET | **session-only**(同上) |
+| /api/v1/llm/models/:id | PATCH / DELETE | **session-only**(同上) |
+| /api/v1/llm/budgets | GET | `llm:read` |
+| /api/v1/llm/budgets | PUT | `llm:write` |
+| /api/v1/llm/calls | GET | `llm:read` |
 
 **Scope 清单**(去除重叠):
 - `agent-definitions:read` / `agent-definitions:write`
@@ -192,6 +202,7 @@ export async function POST(req: Request) {
 - `runs:read` / `runs:write` / `runs:cancel`(Run 独立管理)
 - `vaults:read` / `vaults:write`
 - `projects:read` / `projects:write`
+- `llm:read` / `llm:write`(LLM Router 的预算与调用明细面;credentials / providers / models 是平台级资源,**仅接受 session**,见 specs/llm-router.md §契约与 Scope)
 - `*`(仅 session 默认拥有;Service Token **禁止声明 `*`**,颁发时应拒绝)
 
 **测试要求**(task-5 + task-6 + task-18 覆盖):

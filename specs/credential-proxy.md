@@ -1,5 +1,7 @@
 # Credential Proxy — Design Spec (Optional Enhancement)
 
+> **相关 Spec**：[`llm-router.md`](llm-router.md) — LLM 调用的密钥隔离由 llm-router（协议感知的模型网关）承担，与本 Spec **互补而非替代**。llm-router 落地后，credential-proxy 的适用范围收窄为**非 LLM 的 HTTP 凭据**（GitHub / S3 / …）。对比表见 `llm-router.md` §与 credential-proxy 的关系。
+
 ## Status
 
 **Deferred** — not required for MVP. Current approach: Vault → env injection is sufficient.

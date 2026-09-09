@@ -6,12 +6,17 @@
   "scripts": {
     "check": "tsc --noEmit",
     "lint": "biome check .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "llm:keygen": "tsx gen-router-keypair.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
     "typescript": "^5.8.0",
     "vitest": "^4.0.0",
-    "yaml": "^2.8.3"
+    "yaml": "^2.8.3",
+    "tsx": "^4.21.0"
+  },
+  "dependencies": {
+    "@open-rush/llm-router": "workspace:*"
   }
 }

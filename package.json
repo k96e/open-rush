@@ -25,6 +25,7 @@
     "db:studio": "DATABASE_URL=postgresql://rush:rush@localhost:5432/rush pnpm --filter @open-rush/db db:studio",
     "test:integration": "turbo test:integration",
     "validate:openapi": "node --experimental-strip-types --no-warnings=ExperimentalWarning scripts/validate-openapi.ts",
+    "llm:keygen": "pnpm --filter @open-rush/scripts run llm:keygen",
     "prepare": "husky"
   },
   "lint-staged": {

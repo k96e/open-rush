@@ -12,6 +12,8 @@
  */
 import { type DbClient, llmCredentials, llmProviders } from '@open-rush/db';
 import { and, count, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { clampLimit, decodeKeysetCursor, encodeKeysetCursor } from './cursor.js';
+import { FK_VIOLATION, pgErrorCode, UNIQUE_VIOLATION } from './pg-errors.js';
 
 type CredentialRow = typeof llmCredentials.$inferSelect;
 
@@ -91,62 +93,12 @@ function toSummary(row: CredentialRow): CredentialSummary {
   };
 }
 
-function clampLimit(raw: number | undefined): number {
-  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 1) return 50;
-  return Math.min(Math.floor(raw), 200);
-}
-
 /**
- * 列表游标 = base64url("<createdAtISO>|<id>")，对客户端不透明。
- * 与 `AgentDefinitionService` 同款：`(created_at, id)` keyset，`id` 做并列
- * 时的 tiebreaker，避免同毫秒创建的两行互相顶掉。
+ * 游标编解码复用 `cursor.ts`（M3 抽出，providers / models 共用同一套 keyset）。
+ * 这里保留两个别名导出，M2 的调用点与单测不受影响。
  */
-export function encodeCredentialCursor(createdAt: Date, id: string): string {
-  return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');
-}
-
-/** 解析失败一律返回 null（回落到「第一页」），不因为一个装饰性字段报错。 */
-export function decodeCredentialCursor(cursor: string | undefined): {
-  createdAt: Date;
-  id: string;
-} | null {
-  if (!cursor) return null;
-  try {
-    const raw = Buffer.from(cursor, 'base64url').toString('utf8');
-    const sep = raw.indexOf('|');
-    if (sep < 0) return null;
-    const iso = raw.slice(0, sep);
-    const id = raw.slice(sep + 1);
-    if (!iso || !id) return null;
-    const createdAt = new Date(iso);
-    if (Number.isNaN(createdAt.getTime())) return null;
-    return { createdAt, id };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 取 PostgreSQL 的 SQLSTATE。
- *
- * drizzle 0.45 把驱动错误包进 `DrizzleQueryError`，真正带 `code` 的是
- * `cause`（PGlite 与 postgres.js 都是如此），所以要顺着 cause 链找。
- */
-function pgErrorCode(err: unknown): string | undefined {
-  let current: unknown = err;
-  for (let depth = 0; current && depth < 5; depth++) {
-    if (typeof current === 'object' && 'code' in current && typeof current.code === 'string') {
-      return current.code;
-    }
-    current = (current as { cause?: unknown }).cause;
-  }
-  return undefined;
-}
-
-/** 23505 = unique_violation */
-const UNIQUE_VIOLATION = '23505';
-/** 23503 = foreign_key_violation */
-const FK_VIOLATION = '23503';
+export const encodeCredentialCursor = encodeKeysetCursor;
+export const decodeCredentialCursor = decodeKeysetCursor;
 
 export class DrizzleCredentialStore {
   constructor(private readonly db: DbClient) {}

@@ -133,6 +133,9 @@ importers:
       '@open-rush/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
+      '@open-rush/llm-router':
+        specifier: workspace:*
+        version: link:../../packages/llm-router
       '@open-rush/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp
@@ -422,6 +425,34 @@ importers:
         specifier: ^4.0.0
         version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@25.6.0)(msw@2.13.2(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
 
+  packages/llm-router:
+    dependencies:
+      '@open-rush/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@open-rush/db':
+        specifier: workspace:*
+        version: link:../db
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@electric-sql/pglite@0.4.4)(@opentelemetry/api@1.9.1)(@types/pg@8.15.6)(gel@2.2.0)(pg@8.20.0)(postgres@3.4.9)
+    devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.4.4
+        version: 0.4.4
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.0
+        version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@25.6.0)(msw@2.13.2(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
+
   packages/mcp:
     dependencies:
       zod:
@@ -611,10 +642,17 @@ importers:
         version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@25.6.0)(msw@2.13.2(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
 
   scripts:
+    dependencies:
+      '@open-rush/llm-router':
+        specifier: workspace:*
+        version: link:../packages/llm-router
     devDependencies:
       '@types/node':
         specifier: ^25.6.0
         version: 25.6.0
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.8.0
         version: 5.9.3

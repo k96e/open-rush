@@ -12,8 +12,9 @@
  * 不进日志、不进错误信息（A11）。
  */
 
+import type { ProtocolTranslator } from '../adapters/types.js';
 import type { Subject } from '../auth/token-store.js';
-import type { CatalogRouteMode, ResolvedRoute } from '../catalog/types.js';
+import type { CatalogProtocol, CatalogRouteMode, ResolvedRoute } from '../catalog/types.js';
 import { openSealed } from '../crypto/sealed-box.js';
 import type { CallRecord, CallRecorder } from '../metering/call-record.js';
 import { AnthropicSseUsageParser } from '../usage/anthropic-parser.js';
@@ -34,6 +35,19 @@ export interface ForwardInput {
   isStream: boolean;
   /** 记进 `llm_calls.mode`。与 `route.mode` 可能不同（如 T4.6 注入 stream_options）。 */
   mode: CatalogRouteMode | 'translate';
+  /**
+   * 调用方的协议面。**网关自身错误按它成形**（R5 §6.2），跨协议时它与
+   * `route.provider.protocol` 不同——用错了会把 OpenAI 形状的错误体发给
+   * Anthropic 客户端。不传则退化成上游协议（同协议时两者本就相等）。
+   */
+  face?: CatalogProtocol;
+  /**
+   * 跨协议翻译器（M4·T4.7）。不传 = 同协议直转，请求与响应都不重新编码。
+   *
+   * 传了也**只对 2xx 生效**：上游错误体一律原样透传，不翻译、不包信封——
+   * Claude Code 的能力降级重试按上游错误文案匹配（D10）。
+   */
+  translator?: ProtocolTranslator;
   subject: Subject;
   requestId: string;
   privateKeyPem: string;
@@ -102,7 +116,8 @@ function baseRecord(
 }
 
 export async function forward(input: ForwardInput): Promise<Response> {
-  const { route } = input;
+  const { route, translator } = input;
+  const face = input.face ?? route.provider.protocol;
   const startedAt = new Date();
   const t0 = performance.now();
 
@@ -141,7 +156,7 @@ export async function forward(input: ForwardInput): Promise<Response> {
         })
       );
       return routerErrorResponse(
-        route.provider.protocol,
+        face,
         'internal_error',
         `credential '${route.credential.name}' cannot be unsealed by this router instance`,
         { requestId: input.requestId }
@@ -150,7 +165,9 @@ export async function forward(input: ForwardInput): Promise<Response> {
   }
 
   const url = `${route.provider.baseUrl.replace(/\/+$/, '')}${input.upstreamPath}`;
-  const headers = buildUpstreamHeaders(input.inboundHeaders, route, apiKey, input.requestId);
+  const headers = buildUpstreamHeaders(input.inboundHeaders, route, apiKey, input.requestId, {
+    crossProtocol: translator !== undefined,
+  });
   apiKey = null; // 尽快断开引用；Headers 里那一份随请求结束一起走。
 
   let upstream: Response;
@@ -174,7 +191,7 @@ export async function forward(input: ForwardInput): Promise<Response> {
     );
     // A10：明确 502，错误信息只含供应商**名字**——不含 baseUrl、不含任何密钥。
     return routerErrorResponse(
-      route.provider.protocol,
+      face,
       'upstream_error',
       `provider '${route.provider.name}' is unavailable`,
       { requestId: input.requestId }
@@ -217,7 +234,13 @@ export async function forward(input: ForwardInput): Promise<Response> {
     recorder.enqueue(record);
   };
 
-  // ② 非流式：读完整 body → 解析副本 → 原样返回同一份字节。
+  /**
+   * 翻译**只对 2xx 生效**。上游 4xx/5xx 的 body 一个字节都不动（D10）——
+   * Claude Code 按上游错误文案做能力降级重试，翻一遍就等于换了文案。
+   */
+  const translating = translator !== undefined && upstream.status < 400;
+
+  // ② 非流式：读完整 body → 解析副本 → 返回（同协议是同一份字节，跨协议是翻译后的）。
   //    上游非 2xx 也走这里，状态码与 body 一并照抄（D10）。
   if (!input.isStream || !upstream.body) {
     const raw = new Uint8Array(await upstream.arrayBuffer());
@@ -226,14 +249,39 @@ export async function forward(input: ForwardInput): Promise<Response> {
     } catch {
       // 旁路失败不影响返回。
     }
+    let out: Uint8Array = raw;
+    if (translating) {
+      const translated = translator.translateResponse(raw, route.model.upstreamModel);
+      if (translated === null) {
+        // 上游回了 2xx 但不是能认的形状。宁可 502，也不要把上游形状的 body
+        // 冒充成调用方协议的响应——那会让客户端在解析处炸得莫名其妙。
+        recorder.enqueue(
+          baseRecord(input, startedAt, t0, {
+            status: 'upstream_error',
+            httpStatus: 502,
+            errorCode: 'UPSTREAM_UNTRANSLATABLE',
+            ttfbMs,
+          })
+        );
+        return routerErrorResponse(
+          face,
+          'upstream_error',
+          `provider '${route.provider.name}' returned a response this router cannot translate`,
+          { requestId: input.requestId }
+        );
+      }
+      out = translated;
+    }
     finish(upstream.status);
-    return new Response(raw, { status: upstream.status, headers: responseHeaders });
+    return new Response(out, { status: upstream.status, headers: responseHeaders });
   }
 
   // ③ 流式：tee 转发。上游非 2xx 时同样原样透传（D10）。
+  //    **计量在翻译之前**——账要按上游真实回了什么来记，而不是按翻译产物。
   const teed = teeForMetering(upstream.body, {
     onChunk: (chunk) => parser.push(chunk),
     onEnd: (reason) => finish(upstream.status, reason),
   });
-  return new Response(teed, { status: upstream.status, headers: responseHeaders });
+  const body = translating ? translator.translateStream(teed, route.model.upstreamModel) : teed;
+  return new Response(body, { status: upstream.status, headers: responseHeaders });
 }

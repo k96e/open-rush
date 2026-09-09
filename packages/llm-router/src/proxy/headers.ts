@@ -53,16 +53,29 @@ export function extractGroupingHints(inbound: Headers): {
   };
 }
 
+export interface UpstreamHeaderOptions {
+  /**
+   * 跨协议翻译（M4·T4.7）。为 true 时**额外**剥掉所有 `anthropic-*` 头。
+   *
+   * 这与「开放列表、禁止白名单」并不矛盾：那条规矩管的是 Anthropic → Anthropic，
+   * 目的是别把新 beta 能力挡在门外。而 OpenAI 上游看到 `anthropic-beta` 只会
+   * 当成未知头（好的实现）或直接 400（严格的实现），转过去没有任何收益。
+   */
+  crossProtocol?: boolean;
+}
+
 export function buildUpstreamHeaders(
   inbound: Headers,
   route: ResolvedRoute,
   apiKey: string | null,
-  requestId: string
+  requestId: string,
+  opts: UpstreamHeaderOptions = {}
 ): Headers {
   const out = new Headers();
   for (const [key, value] of inbound) {
     const lower = key.toLowerCase();
     if (HOP_BY_HOP.has(lower) || CONSUME_ONLY.has(lower)) continue;
+    if (opts.crossProtocol && lower.startsWith('anthropic-')) continue;
     out.set(key, value);
   }
 

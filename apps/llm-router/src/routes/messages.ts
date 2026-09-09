@@ -11,14 +11,22 @@ import { handleInference } from './inference.js';
 export function messagesRoutes(deps: RouterDeps): Hono<RouterEnv> {
   const app = new Hono<RouterEnv>();
 
-  app.post('/messages', (c) => handleInference(c, deps, { face: 'anthropic', allowStream: true }));
+  app.post('/messages', (c) =>
+    handleInference(c, deps, { face: 'anthropic', allowStream: true, allowTranslate: true })
+  );
 
   /**
    * token 计数。官方标注可选，但不实现会让 Claude Code 改用一次真实推理去估算
    * 上下文——那才是真的浪费额度。它永远不是流式的。
    */
   app.post('/messages/count_tokens', (c) =>
-    handleInference(c, deps, { face: 'anthropic', allowStream: false })
+    handleInference(c, deps, {
+      face: 'anthropic',
+      allowStream: false,
+      // OpenAI 侧没有对应端点，翻不出来：跨协议时仍然回 404，Claude Code 会自己
+      // 退化成用推理请求估算上下文（官方支持的降级路径）。
+      allowTranslate: false,
+    })
   );
 
   return app;

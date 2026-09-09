@@ -17,7 +17,12 @@ export type CatalogProtocol = 'anthropic' | 'openai';
 /** 上游认证方式。与 `v1.llmAuthStyleSchema` 对齐。 */
 export type CatalogAuthStyle = 'bearer' | 'x-api-key' | 'header';
 
-/** 同协议下的两种路由模式。跨协议的 `translate` 由 M4·T4.7 处理，不在快照里判定。 */
+/**
+ * 同协议下的两种路由模式。
+ *
+ * 跨协议的 `translate`（M4·T4.7）**不在快照里判定**——它取决于调用方打的是哪个
+ * 协议面，而快照只描述目录。判定在 `apps/llm-router/src/routes/inference.ts`。
+ */
 export type CatalogRouteMode = 'passthrough' | 'rewrite-model';
 
 export interface CatalogProvider {

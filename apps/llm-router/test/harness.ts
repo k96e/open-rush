@@ -171,6 +171,8 @@ export interface Harness {
   setRateLimit(decision: RateLimitDecision | null): void;
   /** 传 null 关掉预算闸门。 */
   setBudget(decision: BudgetDecision | null): void;
+  /** 跨协议翻译总开关（T4.7）。默认开；设 false 退回 M4 的 404 行为。 */
+  setTranslateEnabled(value: boolean): void;
   /** 两道闸门各自被调用了几次——用来证「开关关闭时不生效」。 */
   gateCalls: { rateLimit: number; budget: number };
   fetch(path: string, init?: RequestInit): Promise<Response>;
@@ -199,6 +201,7 @@ export async function createHarness(
   // 两道闸门默认**不装配**（= 开关关闭），与 M4 的行为完全一致。
   let rateLimitDecision: RateLimitDecision | null = null;
   let budgetDecision: BudgetDecision | null = null;
+  let translateEnabled = true;
   const gateCalls = { rateLimit: 0, budget: 0 };
 
   const deps: RouterDeps = {
@@ -228,6 +231,12 @@ export async function createHarness(
       };
     },
     privateKeyPem: KEYPAIR.privateKeyPem,
+    get translateEnabled() {
+      return translateEnabled;
+    },
+    // 单测里不发心跳：定时器与断言的时序纠缠没有意义，心跳本身在
+    // `packages/llm-router` 的 `translate-stream.test.ts` 里用假时钟单独测。
+    translatePingMs: 0,
     isDraining: () => draining,
   };
 
@@ -252,6 +261,9 @@ export async function createHarness(
     },
     setBudget(decision) {
       budgetDecision = decision;
+    },
+    setTranslateEnabled(value) {
+      translateEnabled = value;
     },
     gateCalls,
     fetch: async (path, init) =>

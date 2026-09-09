@@ -60,6 +60,20 @@ export interface RouterDeps {
   /** 只在转发那一刻用于解封凭据；不进日志、不进响应。 */
   privateKeyPem: string;
   /**
+   * 跨协议翻译总开关（T4.7）。**`false` 才算关**，未设置 = 开。
+   *
+   * 关掉之后行为退回 M4：Anthropic 面遇到 OpenAI 上游一律 404 +
+   * `PROTOCOL_FACE_MISMATCH`。这是翻译层出问题时不用回滚镜像的那条退路。
+   */
+  translateEnabled?: boolean;
+  /**
+   * 翻译流的心跳间隔（毫秒）。0 = 不发心跳。
+   *
+   * OpenAI 上游一个 `ping` 都不发，而 Claude Code 的字节看门狗是 300 秒——
+   * 翻译出来的流必须自己造心跳，否则长思考/长工具参数会被客户端判死。
+   */
+  translatePingMs?: number;
+  /**
    * 优雅退出时置 true → `readyz` 立刻 503，负载均衡摘流，在途流继续跑完（D11 / A3）。
    */
   isDraining?: () => boolean;

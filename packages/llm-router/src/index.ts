@@ -87,6 +87,12 @@ export {
   rateLimitKey,
 } from './guard/rate-limit.js';
 export {
+  containsSecrets,
+  redactLogFields,
+  redactSecrets,
+  redactValue,
+} from './log/redact.js';
+export {
   aggregateBudgetDeltas,
   type BudgetDelta,
 } from './metering/budget-delta.js';

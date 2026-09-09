@@ -18,6 +18,11 @@
       "types": "./dist/store.d.ts",
       "import": "./dist/store.js",
       "require": "./dist/store.cjs"
+    },
+    "./token": {
+      "types": "./dist/token.d.ts",
+      "import": "./dist/token.js",
+      "require": "./dist/token.cjs"
     }
   },
   "scripts": {

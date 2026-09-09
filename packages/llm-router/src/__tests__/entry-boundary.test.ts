@@ -27,13 +27,19 @@ describe('子路径入口的产物边界', () => {
     'sealing.cjs',
     'store.js',
     'store.cjs',
+    'token.js',
+    'token.cjs',
   ])('%s 的字节里没有解封函数', (file) => {
     const content = read(file);
     expect(content.length).toBeGreaterThan(0);
     expect(content).not.toContain(UNSEAL);
   });
 
-  it.each(['sealing.js', 'store.js'])('%s 不引用任何共享 chunk（splitting 必须关着）', (file) => {
+  it.each([
+    'sealing.js',
+    'store.js',
+    'token.js',
+  ])('%s 不引用任何共享 chunk（splitting 必须关着）', (file) => {
     // 一旦 splitting 被打开，这里会出现 `from "./chunk-XXXX.js"`，
     // 而那个 chunk 是与 `.` 入口共用的——解封代码就绕回来了。
     expect(read(file)).not.toMatch(/from ["']\.\/chunk-/);
@@ -53,6 +59,29 @@ describe('子路径入口的产物边界', () => {
     expect(typeof mod.DrizzleModelStore).toBe('function');
     expect(typeof mod.bumpCatalogVersion).toBe('function');
     expect(read('store.js')).not.toContain('node:crypto');
+  });
+
+  it('token 入口只有铸造与哈希——没有转发、没有目录、没有 store', async () => {
+    const mod = await import('../token.js');
+    expect(Object.keys(mod).sort()).toEqual([
+      'ROUTER_TOKEN_PREFIX',
+      'hashRouterToken',
+      'mintRouterToken',
+    ]);
+    // control-plane 是 apps/web 的依赖：从 `.` 引会把网关那一整套经由
+    // control-plane 传递回 web，M4 后续刚拆掉的东西就白拆了。
+    const content = read('token.js');
+    expect(content).not.toContain('DrizzleCatalogStore');
+    expect(content).not.toContain('drizzle-orm');
+    expect(content).not.toContain('forward');
+  });
+
+  it('token 入口铸出来的令牌能被 `.` 入口的哈希认出来（两个入口没有各自一份实现）', async () => {
+    const { mintRouterToken } = await import('../token.js');
+    const { hashRouterToken } = await import('../index.js');
+    const { plaintext, tokenHash } = mintRouterToken();
+    expect(plaintext.startsWith('rt_')).toBe(true);
+    expect(hashRouterToken(plaintext)).toBe(tokenHash);
   });
 
   it('`.` 入口仍然带着解封函数（网关要用）', () => {

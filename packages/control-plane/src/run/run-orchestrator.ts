@@ -1,5 +1,7 @@
 import type { CreateSandboxOptions, SandboxProvider } from '@open-rush/sandbox';
 import type { EventStore } from '../event-store.js';
+import type { LlmAccessService, LlmGrant } from '../llm/llm-access-service.js';
+import type { RunUsageTotals } from '../llm/router-token-store.js';
 import { AgentBridge } from './agent-bridge.js';
 import type { AgentExecutor } from './agent-executor.js';
 import type { CheckpointService } from './checkpoint-service.js';
@@ -39,6 +41,14 @@ export interface RunOrchestratorDeps {
   eventStore: EventStore;
   checkpointService?: CheckpointService;
   agentExecutor?: AgentExecutor;
+  /**
+   * llm-router 接入（M6·T6.2）。**可选依赖**：不装配时这条链路的一切都不发生
+   * ——不签发令牌、沙箱 env 里没有 `ANTHROPIC_*`、不聚合用量、不吊销——行为与
+   * 改造前完全一致。这是灰度与回滚开关，不要做成必选。
+   *
+   * 装配与否由 `apps/control-worker` 按 `LLM_ROUTER_BASE_URL` 是否存在决定。
+   */
+  llmAccess?: LlmAccessService;
   resolveProjectIdForAgent?: (agentId: string) => Promise<string | null>;
   /** Release the task's active_run_id lock after a run reaches a terminal state. */
   releaseTaskLock?: (runId: string) => Promise<void>;
@@ -57,6 +67,7 @@ export class RunOrchestrator {
     const isFollowUp = run?.parentRunId != null;
     let sandboxId: string | null = null;
     let agentContext: Awaited<ReturnType<AgentExecutor['prepareContext']>> | null = null;
+    let grant: LlmGrant | null = null;
     const v1EventsEnabled = isV1EventsEnabled();
     // Tracks whether a `data-openrush-run-started` chunk was actually
     // appended. Stays false when `emitRunStarted` no-ops (e.g. when
@@ -81,9 +92,26 @@ export class RunOrchestrator {
         agentContext = await this.deps.agentExecutor.prepareContext(agentId, projectId);
       }
 
+      // ★ 签发 run 级接入令牌 —— 必须在 sandbox 创建之前，env 才注得进去。
+      if (this.deps.llmAccess && agentContext) {
+        grant = await this.deps.llmAccess.issueForRun({
+          runId,
+          agentId,
+          projectId: agentContext.projectId,
+          ownerUserId: agentContext.agentConfig.createdBy ?? null,
+          modelAlias: agentContext.modelAlias,
+        });
+      }
+      // 合并顺序固定：**router 后写、优先级更高**。Vault 里若也配了
+      // `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`，必须被网关的值盖掉，
+      // 否则沙箱会绕过网关直连供应商（specs/llm-router.md §密钥边界）。
+      // 未装配 llmAccess 且没有 agentContext 时保持 `undefined`（而不是 `{}`），
+      // 与改造前逐字一致——回归用例就是对着这一点断言的。
+      const sandboxEnv =
+        agentContext || grant ? { ...(agentContext?.env ?? {}), ...(grant?.env ?? {}) } : undefined;
       const sandboxOptions: CreateSandboxOptions = {
         agentId,
-        env: agentContext?.env,
+        env: sandboxEnv,
         ttlSeconds: 3600,
       };
       const sandbox = await this.deps.sandboxProvider.create(sandboxOptions);
@@ -127,7 +155,13 @@ export class RunOrchestrator {
 
       const { response } = await agentBridge.sendPrompt(fullPrompt, {
         sessionId: runId,
-        env: agentContext?.env,
+        // ⚠️ `sandboxEnv` 必须**同时**走这一条（`ref/R3` §4.2.1）：dev 下的
+        // `LocalDevSandboxProvider.create()` 完全忽略 options，只改上面那处的话
+        // 会看到「网关根本没被调用、还在直连」。
+        env: sandboxEnv,
+        // ★ 修 `ref/R1` §2.6 的断链：这个参数一直存在，但从来没被传过，
+        // 于是 per-agent / per-run 模型选择实际不生效。
+        modelId: agentContext?.modelAlias,
         allowedTools: agentContext?.agentConfig.allowedTools,
         maxTurns: agentContext?.agentConfig.maxSteps,
         projectId: agentContext?.projectId,
@@ -143,6 +177,18 @@ export class RunOrchestrator {
 
       // 5. Consume SSE stream
       await this.consumeStream(runId, response, v1EventsEnabled);
+
+      // 5a. 逐调用记录聚合回写 `data-openrush-usage`（D8 / A5）。
+      // 放在 `run-done` **之前**：那是终态标记，停在它上面的消费者不该漏掉用量。
+      // best-effort——计量缺失不得影响 run 收敛。
+      if (v1EventsEnabled && this.deps.llmAccess) {
+        try {
+          const usage = await this.deps.llmAccess.aggregateUsage(runId);
+          if (usage) await this.emitUsage(runId, usage);
+        } catch (err) {
+          console.error('[orchestrator] usage aggregation failed (non-fatal):', err);
+        }
+      }
 
       // 5b. Inject `data-openrush-run-done` {status: 'success'} (v1 only).
       // Gate on `runStartedEmitted` to enforce the "no done-before-started"
@@ -184,6 +230,15 @@ export class RunOrchestrator {
         // Best-effort
       }
     } finally {
+      // ★ 无论成败都吊销令牌，把凭据暴露窗口压到 run 的实际时长。
+      // 放在最前面：后面两步（释放任务锁、销毁沙箱）失败也不能让令牌留着。
+      if (this.deps.llmAccess) {
+        try {
+          await this.deps.llmAccess.revokeForRun(runId);
+        } catch (err) {
+          console.error(`[orchestrator] token revoke failed for run ${runId}:`, err);
+        }
+      }
       // Release the task lock so the next run can be created
       if (this.deps.releaseTaskLock) {
         try {
@@ -380,6 +435,19 @@ export class RunOrchestrator {
       },
     });
     return true;
+  }
+
+  /**
+   * Emit `data-openrush-usage` via the single-writer EventStore.
+   * Payload shape mirrors `openrushUsagePartSchema` in
+   * `packages/contracts/src/v1/runs.ts`.
+   */
+  private async emitUsage(runId: string, usage: RunUsageTotals): Promise<void> {
+    await this.deps.eventStore.appendAssignSeq({
+      runId,
+      eventType: 'data-openrush-usage',
+      payload: { type: 'data-openrush-usage', data: usage },
+    });
   }
 
   /**

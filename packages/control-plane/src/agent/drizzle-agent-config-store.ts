@@ -10,6 +10,8 @@ function mapRow(row: AgentRow): AgentConfig {
     id: row.id,
     projectId: row.projectId,
     name: row.name,
+    // `agents.model` 此前被漏掉，per-agent 模型选择因此从不生效（`ref/R1` §2.6）。
+    model: row.model,
     scope: row.isBuiltin ? 'builtin' : 'project',
     status: row.status as AgentConfig['status'],
     description: row.description,
@@ -62,6 +64,7 @@ export class DrizzleAgentConfigStore implements AgentConfigStore {
         projectId: config.projectId,
         status: config.status,
         name: config.name,
+        model: config.model ?? null,
         description: config.description ?? null,
         icon: config.icon ?? null,
         providerType: 'claude-code',
@@ -83,6 +86,7 @@ export class DrizzleAgentConfigStore implements AgentConfigStore {
     const updates: Partial<typeof agents.$inferInsert> = {};
 
     if (update.name !== undefined) updates.name = update.name;
+    if (update.model !== undefined) updates.model = update.model;
     if (update.description !== undefined) updates.description = update.description;
     if (update.icon !== undefined) updates.icon = update.icon;
     if (update.systemPrompt !== undefined) updates.systemPrompt = update.systemPrompt;

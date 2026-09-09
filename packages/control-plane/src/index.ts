@@ -30,6 +30,7 @@ export {
   type InsertResult,
 } from './event-store.js';
 export { type ConsumeResult, IdempotentConsumer } from './idempotent-consumer.js';
+export * from './llm/index.js';
 export * from './mcp/index.js';
 export * from './memory/index.js';
 export * from './project/index.js';

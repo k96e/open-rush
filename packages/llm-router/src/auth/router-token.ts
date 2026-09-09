@@ -8,20 +8,12 @@
  * 明文只在签发时返回一次，库里只存 SHA-256 hex（复用 `service_tokens` 的成熟
  * 范式，但不复用表——生命周期与配额字段都不同）。
  */
-import { createHash, randomBytes } from 'node:crypto';
+import { hashRouterToken, ROUTER_TOKEN_PREFIX } from './mint.js';
 import type { Subject, TokenStore } from './token-store.js';
 
-export const ROUTER_TOKEN_PREFIX = 'rt_';
-
-/** 明文形如 `rt_<43 chars base64url>`。 */
-export function mintRouterToken(): { plaintext: string; tokenHash: string } {
-  const plaintext = ROUTER_TOKEN_PREFIX + randomBytes(32).toString('base64url');
-  return { plaintext, tokenHash: hashRouterToken(plaintext) };
-}
-
-export function hashRouterToken(raw: string): string {
-  return createHash('sha256').update(raw).digest('hex');
-}
+// 铸造与哈希住在 `./mint.js`，好让 `@open-rush/llm-router/token` 子路径入口只拉
+// 到那一个模块（M6·T6.1）。这里原样再导出一次，包内既有 import 路径不必改。
+export { hashRouterToken, mintRouterToken, ROUTER_TOKEN_PREFIX } from './mint.js';
 
 /**
  * 从 `Authorization: Bearer …` 或 `x-api-key` 提取令牌。

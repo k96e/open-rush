@@ -20,6 +20,7 @@
   "dependencies": {
     "@open-rush/contracts": "workspace:*",
     "@open-rush/db": "workspace:*",
+    "@open-rush/llm-router": "workspace:*",
     "@open-rush/mcp": "workspace:*",
     "@open-rush/memory": "workspace:*",
     "@open-rush/sandbox": "workspace:*",

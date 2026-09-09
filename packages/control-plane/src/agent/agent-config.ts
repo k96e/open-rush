@@ -4,6 +4,12 @@ export interface AgentConfig {
   id: string;
   projectId: string | null;
   name: string;
+  /**
+   * 对应 `agents.model` 列。为空时由 {@link AgentExecutor} 回落到
+   * `LLM_ROUTER_DEFAULT_MODEL`（M6·T6.2 修 `ref/R1` §2.6 的断链：这一列此前
+   * 存在但从不被读，per-agent 模型选择实际不生效）。
+   */
+  model?: string | null;
   scope: AgentScope;
   status: 'active' | 'inactive';
   description?: string | null;

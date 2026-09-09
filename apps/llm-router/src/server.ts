@@ -30,8 +30,16 @@ import { createLogger } from '@open-rush/observability';
 import { createRedisClient } from '@open-rush/stream';
 import { createApp } from './app.js';
 import type { BudgetGate, RateLimitGate } from './deps.js';
+import { sanitizingLogger } from './log/sanitizing-logger.js';
 
-const log = createLogger({ service: 'llm-router' });
+/**
+ * 进程里**唯一**的日志出口，且已经过清洗（M6·T6.5，A9）。
+ *
+ * 下面几处打的是外部来的字符串——目录刷新的告警带 provider 名、两道闸门降级与
+ * 计量批写失败带 `err`（里面可能有上游 URL 与响应片段）。包在出口上，这些调用点
+ * 就不必各自记得清洗。
+ */
+const log = sanitizingLogger(createLogger({ service: 'llm-router' }));
 
 /** `'false'` 才算关；其余（含未设置）都算开。 */
 function envFlag(name: string, defaultOn: boolean): boolean {

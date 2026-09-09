@@ -21,7 +21,13 @@ export type AuditAction =
   | 'run.fail'
   | 'version.create'
   | 'version.publish'
-  | 'deploy.execute';
+  | 'deploy.execute'
+  // —— llm-router（M6·T6.5）——
+  // 凭据的两条都不记录任何密文或明文，只记 credentialId + 操作者；
+  // `llm.token.revoke` 记的是 run 级令牌的吊销，是 A9「吊销可审计」那一条。
+  | 'llm.credential.store'
+  | 'llm.credential.rotate'
+  | 'llm.token.revoke';
 
 export interface AuditLogEntry {
   id: string;

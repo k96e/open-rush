@@ -105,6 +105,32 @@ control-worker ──SSE①── agent-worker ── Claude Code CLI ──▶ 
 
 per-run 短时令牌（`rt_*`），不是供应商真 key。即使 agent 在沙箱里有 bash，能读到的也只是一个分钟级、随 run 吊销、只能打到本网关的令牌（D12：没有钥匙就没有门）。
 
+### env 注入：合并顺序与两条路径
+
+**合并顺序固定为 `{ ...vaultEnv, ...grant.env }` —— router 后写、优先级更高。**
+Vault 将来真接线之后，若那边也配了 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`，必须被网关签发的值盖掉；反过来会让沙箱绕过网关直连供应商，密钥边界与计量同时失效。这条顺序写在 `RunOrchestrator` 的代码注释里，改动前先改本节。
+
+`grant.env` 有**两条**到达 Claude Code 子进程的路径，二者在不同模式下生效，因此**必须同时走**：
+
+| 路径 | 载体 | dev（`LocalDevSandboxProvider`） | prod（`OpenSandboxProvider`） |
+|---|---|---|---|
+| ① 沙箱容器环境 | `sandboxProvider.create({ env })` | **无效**——该实现完全忽略 `options` | 有效 |
+| ② 请求体透传 | `agentBridge.sendPrompt(prompt, { env })` → agent-worker 的 `providerEnv` | 有效 | 有效 |
+
+只改 ① 的现象是"网关根本没被调用、还在直连"。同样地，`apps/agent-worker/.env.local` 里的 `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` 必须留空。
+
+### ⚠️ 部署顺序约束（密钥边界是硬切，不随灰度开关走）
+
+控制面一侧的 `llmAccess` 是可选依赖——不装配时 `RunOrchestrator` 的行为与接网关之前完全一致（不签发、不注入、不聚合、不吊销），这是灰度与回滚开关。
+
+**但 agent-worker 一侧不是可选的**：它无条件抹除供应商密钥键，也不再从自己的 `process.env` 读网关地址。于是改造之后"**没有网关就没有凭据**"。上线顺序因此固定：
+
+1. 起 llm-router，配好私钥、目录（provider / model / credential）；
+2. 确认 `readyz` 就绪、`/v1/models` 能列出 alias；
+3. 才设 control-worker 的 `LLM_ROUTER_BASE_URL`。
+
+第 1 步与第 3 步之间的窗口里，agent-worker 调不通任何模型——这是有意为之的失败方式（宁可调不通，也不要悄悄退回直连）。
+
 ### ⚠️ 依赖版本漂移风险（必须显式抹除，不能靠"不设置就没有"）
 
 `ai-sdk-provider-claude-code` 在 **3.4.4 → 3.6.0** 之间反转了子进程 env 的继承行为：
@@ -139,6 +165,10 @@ const providerEnv: Record<string, string | undefined> = {
 - `x-claude-code-session-id` / `-agent-id` / `-parent-agent-id` **只作分组提示**记入 `llm_calls`，不作授权与计费依据——沙箱内可以随意伪造它们。
 - 令牌明文只在签发那一刻可见一次，库里存 SHA-256。
 - 生命周期：随 run 签发，run 收敛时吊销。**吊销生效上界 = `TokenAuthenticator` 缓存 TTL**（默认 15s），这个上界要写进验收报告，不能只说"立即生效"。
+- 签发在**沙箱创建之前**（否则 env 注不进去），吊销在 `RunOrchestrator` 的 `finally` 里——**成功与失败路径都要走到**，且排在释放任务锁与销毁沙箱之前：后两步失败也不能让令牌留着。吊销是幂等的（`WHERE revoked_at IS NULL`），重复调用只是多一次命中 0 行的 UPDATE。
+- 令牌默认有效期 3900s = 沙箱 ttl 3600s + 5 分钟缓冲，可由 `LLM_ROUTER_TOKEN_TTL_SECONDS` 覆盖。
+- **最小权限**：per-run 令牌的 `allowed_model_aliases` 只放这次 run 解析出来的那一个 alias。alias 的解析链是 `agents.model` → `LLM_ROUTER_DEFAULT_MODEL` → `'sonnet'`，空白串等同于未配置。
+- run 收敛时按 `runId` 聚合 `llm_calls`，发出 `data-openrush-usage`（D8 / A5）。**发在 `data-openrush-run-done` 之前**——那是终态标记，停在它上面的消费者不该漏掉用量。聚合失败不阻塞 run 收敛。
 
 ---
 

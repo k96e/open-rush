@@ -102,10 +102,23 @@ app.post('/prompt', async (c) => {
     // Model from env: CLAUDE_MODEL / ANTHROPIC_MODEL (Bedrock ARN) or fallback
     const effectiveModelId =
       modelId ?? process.env.CLAUDE_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'sonnet';
-    const providerEnv: Record<string, string> = {
+    // ── 模型凭据边界（specs/llm-router.md §密钥边界）───────────────────────
+    // 供应商真实密钥**不再**出现在本进程或沙箱环境中。控制面通过 `env` 下发的
+    // 是 llm-router 的短时接入令牌（ANTHROPIC_AUTH_TOKEN）与网关地址
+    // （ANTHROPIC_BASE_URL）；本容器不配置任何供应商密钥。
+    //
+    // 显式把这些键置为 undefined，而不是「不设置就没有」：
+    // ai-sdk-provider-claude-code 3.4.4 的子进程 env 白名单不含 ANTHROPIC_*，
+    // 但 3.6.0+（Agent SDK 0.3.x）新增了 ANTHROPIC_*/AWS_*/GOOGLE_* 前缀继承。
+    // 显式抹除让这条不变量**不随依赖升级漂移**（`ref/R1` §2.8）。
+    // 回归测试见 `__tests__/credential-boundary.test.ts`（「密钥边界（A11）」一组）。
+    const providerEnv: Record<string, string | undefined> = {
       ...(env ?? {}),
-      ...(process.env.ANTHROPIC_BASE_URL && { ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL }),
-      ...(process.env.ANTHROPIC_API_KEY && { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }),
+      ANTHROPIC_API_KEY: undefined,
+      AWS_ACCESS_KEY_ID: undefined,
+      AWS_SECRET_ACCESS_KEY: undefined,
+      AWS_SESSION_TOKEN: undefined,
+      CLAUDE_CODE_USE_BEDROCK: undefined,
     };
 
     const hasWorkspaceContent = projectPath && readdirSync(projectPath).length > 0;
@@ -116,7 +129,9 @@ app.post('/prompt', async (c) => {
         maxTurns: maxTurns ?? 30,
         sessionId: sid,
         ...(allowedTools?.length ? { allowedTools } : {}),
-        ...(Object.keys(providerEnv).length > 0 ? { env: providerEnv } : {}),
+        // 恒传 `env`：抹除键本身就是要送到 provider 那一层去的，
+        // 「没有键就不传」会让 3.6.0+ 的前缀继承重新把真 key 带进子进程。
+        env: providerEnv,
         ...(hasWorkspaceContent ? { cwd: projectPath } : {}),
       }),
       ...(effectiveSystemPrompt ? { system: effectiveSystemPrompt } : {}),

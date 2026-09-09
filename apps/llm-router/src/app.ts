@@ -5,12 +5,14 @@
  * 假认证器把整条管线跑通，不必起 PG，也不必造真令牌。
  *
  * 日志刻意只打 `method / path / status / requestId` 四个字段——**不打请求头、
- * 不打 body、不打上游 URL**。这是 A9 在 M4 的落法：没有可泄漏的内容进日志，
- * 就不需要在这一层做清洗（`sanitize` 的接线归 M6·T6.5）。
+ * 不打 body、不打上游 URL**。M6·T6.5 在这之上再包一层 {@link sanitizingLogger}：
+ * `path` 是调用方能完全控制的字符串（`/v1/sk-ant-…` 这种请求随时会来），
+ * 四字段少不代表四字段干净。
  */
 import { createHonoMiddleware } from '@open-rush/observability/hono';
 import { Hono } from 'hono';
 import type { RouterDeps, RouterEnv } from './deps.js';
+import { sanitizingLogger } from './log/sanitizing-logger.js';
 import { authenticate } from './middleware/authenticate.js';
 import { RATE_LIMITED_PATHS, rateLimit } from './middleware/rate-limit.js';
 import { chatCompletionsRoutes } from './routes/chat-completions.js';
@@ -19,11 +21,14 @@ import { modelsRoutes } from './routes/models.js';
 
 export function createApp(deps: RouterDeps): Hono<RouterEnv> {
   const app = new Hono<RouterEnv>();
+  // 即使 `server.ts` 传进来的已经是包过的，再包一次也是幂等的（清洗过的字符串
+  // 不含可匹配的模式）——单测直接调 `createApp` 时才是这一层真正起作用的场合。
+  const logger = deps.logger ? sanitizingLogger(deps.logger) : undefined;
 
   app.use('*', createHonoMiddleware('llm-router'));
   app.use('*', async (c, next) => {
     await next();
-    deps.logger?.info({
+    logger?.info({
       requestId: c.get('requestId'),
       method: c.req.method,
       path: c.req.path,

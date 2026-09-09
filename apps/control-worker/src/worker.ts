@@ -14,6 +14,7 @@ import {
 } from '@open-rush/sandbox';
 import { and, eq } from 'drizzle-orm';
 import { PgBoss } from 'pg-boss';
+import { createLlmAccess } from './llm-access.js';
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://rush:rush@localhost:5432/rush';
 const OPENSANDBOX_API_URL = process.env.OPENSANDBOX_API_URL ?? 'http://localhost:8090';
@@ -51,6 +52,8 @@ async function main() {
     resolveVaultEnv: async () => ({}),
     resolveSkills: async () => [],
     resolveMcpServers: async () => [],
+    // `agents.model` 为空时的回落 alias（M6·T6.2）。
+    defaultModelAlias: process.env.LLM_ROUTER_DEFAULT_MODEL,
   });
   const sandboxProvider: SandboxProvider = IS_DEV
     ? new LocalDevSandboxProvider({ agentWorkerUrl: DEV_AGENT_WORKER_URL })
@@ -59,11 +62,14 @@ async function main() {
         execHost: EXEC_HOST,
       });
   const eventStore = new DrizzleEventStore(db);
+  // 未设 LLM_ROUTER_BASE_URL → undefined → orchestrator 退化为改造前行为。
+  const llmAccess = createLlmAccess(db);
   const orchestrator = new RunOrchestrator({
     runService,
     sandboxProvider,
     eventStore,
     agentExecutor,
+    llmAccess,
     resolveProjectIdForAgent: async (agentId: string) => {
       const agent = await agentStore.getById(agentId);
       return agent?.projectId ?? null;

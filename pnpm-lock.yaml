@@ -380,6 +380,9 @@ importers:
       '@open-rush/db':
         specifier: workspace:*
         version: link:../db
+      '@open-rush/llm-router':
+        specifier: workspace:*
+        version: link:../llm-router
       '@open-rush/mcp':
         specifier: workspace:*
         version: link:../mcp

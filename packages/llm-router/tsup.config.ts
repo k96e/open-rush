@@ -13,7 +13,7 @@ import { defineConfig } from 'tsup';
  * 谁也不会同时加载两个入口，这份重复不产生运行时成本。
  */
 export default defineConfig({
-  entry: ['src/index.ts', 'src/sealing.ts', 'src/store.ts'],
+  entry: ['src/index.ts', 'src/sealing.ts', 'src/store.ts', 'src/token.ts'],
   format: ['esm', 'cjs'],
   dts: true,
   splitting: false,

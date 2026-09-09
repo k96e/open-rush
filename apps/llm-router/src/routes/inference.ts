@@ -1,16 +1,19 @@
 /**
  * 两个协议面共用的推理管线（M4·T4.5 / T4.6）。
  *
- * 顺序是固定的：**认证（中间件） → 解析 → 令牌白名单 → 路由 → 改写 → 转发**。
- * 每一步的失败都按 R5 §6.2 成形，并（在有 subject 之后）落一条 `llm_calls`——
- * 「403 / 404 / 400 也要计量」是 A5 对账的前提：只记成功调用的话，一个被拒的
- * 令牌在报表里会完全隐身。
+ * 顺序是固定的：**认证（中间件） → 限流（中间件） → 解析 → 令牌白名单 → 路由 →
+ * 预算 → 改写 → 转发**。每一步的失败都按 R5 §6.2 成形，并（在有 subject 之后）
+ * 落一条 `llm_calls`（见 `../reject.ts`）。
+ *
+ * 预算闸门放在路由**之后**：这样被拦下的那条 `llm_calls` 带得上 alias 与 provider，
+ * 报表里能看出「是哪个模型把额度花光的」。限流则相反，坐在中间件里、body 都不解析
+ * ——它的职责是尽早卸载，多解析一次 body 就是多一份被打满时的开销。
  *
  * 这一层**不做任何提示词加工**（绝对边界）：除 `$.model` 与 OpenAI 流式的
  * `stream_options.include_usage` 外，请求体一个字节都不动。
  */
 import {
-  type CallRecord,
+  type BudgetDecision,
   type CatalogProtocol,
   type CatalogRouteMode,
   forward,
@@ -18,16 +21,12 @@ import {
   isAliasAllowed,
   isRouteError,
   ModelRewriteError,
-  type ResolvedRoute,
-  ROUTER_ERRORS,
-  type RouterErrorKind,
   resolveRoute,
   rewriteModelField,
-  routerErrorResponse,
-  type Subject,
 } from '@open-rush/llm-router';
 import type { Context } from 'hono';
 import type { RouterDeps, RouterEnv } from '../deps.js';
+import { reject } from '../reject.js';
 
 const DECODER = new TextDecoder();
 
@@ -41,74 +40,6 @@ export interface InferenceOptions {
    * 只有 `/v1/chat/completions` 打开。
    */
   injectUsageOnStream?: boolean;
-}
-
-interface RejectionInput {
-  c: Context<RouterEnv>;
-  deps: RouterDeps;
-  face: CatalogProtocol;
-  kind: RouterErrorKind;
-  message: string;
-  alias: string | null;
-  stream: boolean;
-  errorCode: string;
-  route?: ResolvedRoute;
-  startedAt: Date;
-  t0: number;
-}
-
-/**
- * 拒绝路径的统一出口：**先记一条 `llm_calls`，再返回错误体**。
- *
- * 归属全部来自 subject（D6）；`cc_*` 分组提示来自请求头，可伪造，只用于下钻。
- */
-function reject(input: RejectionInput): Response {
-  const { c, deps, face, kind, message, alias, route } = input;
-  const subject = c.get('subject') as Subject | undefined;
-  const spec = ROUTER_ERRORS[kind];
-
-  if (subject) {
-    const record: CallRecord = {
-      requestId: c.get('requestId') ?? null,
-      tokenId: subject.tokenId,
-      subjectType: subject.subjectType,
-      runId: subject.runId,
-      agentId: subject.agentId,
-      projectId: subject.projectId,
-      ownerUserId: subject.ownerUserId,
-      ccSessionId: c.req.header('x-claude-code-session-id') ?? null,
-      ccAgentId: c.req.header('x-claude-code-agent-id') ?? null,
-      // body 都没解析出来时没有 alias 可记。列是 NOT NULL，用空串而不是造一个
-      // 假名字——报表里一眼能看出「这次调用连模型都没说清」。
-      modelAlias: alias ?? '',
-      providerId: route?.provider.id ?? null,
-      upstreamModel: route?.model.upstreamModel ?? null,
-      protocol: route?.provider.protocol ?? face,
-      mode: route?.mode ?? 'passthrough',
-      stream: input.stream,
-      status: spec.callStatus,
-      httpStatus: spec.httpStatus,
-      errorCode: input.errorCode,
-      tokensIn: 0,
-      tokensCacheWrite: 0,
-      tokensCacheRead: 0,
-      tokensOut: 0,
-      tokensReasoning: 0,
-      costUsd: '0.000000',
-      ttfbMs: null,
-      latencyMs: Math.round(performance.now() - input.t0),
-      startedAt: input.startedAt,
-      completedAt: new Date(),
-    };
-    try {
-      deps.recorder.enqueue(record);
-    } catch (err) {
-      // A5：计量失败不阻塞上层调用。
-      deps.logger?.warn({ err: String(err) }, 'failed to record rejected call');
-    }
-  }
-
-  return routerErrorResponse(face, kind, message, { requestId: c.get('requestId') });
 }
 
 export async function handleInference(
@@ -233,7 +164,35 @@ export async function handleInference(
     });
   }
 
-  // ⑤ 改写。passthrough 时 outBody 与 bodyBytes 是同一个引用（A1 第一档承诺）。
+  // ⑤ 预算闸门。未装配（deps.budget 为空）= 开关关闭，与限流开关互相独立（A6）。
+  //    observe 档在 BudgetService 内部就放行了，走到这里的一定是 enforce 且已超限。
+  if (deps.budget) {
+    let decision: BudgetDecision | null = null;
+    try {
+      decision = await deps.budget.check(subject);
+    } catch (err) {
+      // 闸门自己炸了不能连累转发（可用性优先，与 Redis 不可达时的降级同理）。
+      deps.logger?.warn({ err: String(err) }, 'budget check failed, allowing request');
+    }
+    if (decision && !decision.allowed) {
+      return reject({
+        c,
+        deps,
+        face,
+        kind: 'budget_exceeded',
+        message: decision.reason,
+        alias,
+        stream,
+        route: resolved,
+        errorCode: 'BUDGET_EXCEEDED',
+        retryAfterSec: decision.retryAfterSec,
+        startedAt,
+        t0,
+      });
+    }
+  }
+
+  // ⑥ 改写。passthrough 时 outBody 与 bodyBytes 是同一个引用（A1 第一档承诺）。
   let outBody: Uint8Array = bodyBytes;
   let mode: CatalogRouteMode = resolved.mode;
   if (resolved.mode === 'rewrite-model') {
@@ -263,7 +222,7 @@ export async function handleInference(
     if (injected.injected) mode = 'rewrite-model';
   }
 
-  // ⑥ 转发。path 含 query（`/v1/messages?beta=true` 必须原样带过去）。
+  // ⑦ 转发。path 含 query（`/v1/messages?beta=true` 必须原样带过去）。
   const url = new URL(c.req.url);
   return forward({
     route: resolved,

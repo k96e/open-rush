@@ -19,6 +19,26 @@ export {
 } from './auth/router-token.js';
 export { isAliasAllowed, type Subject, type TokenStore } from './auth/token-store.js';
 export {
+  type BudgetDecision,
+  BudgetService,
+  type BudgetServiceOptions,
+} from './budget/budget-service.js';
+export type { BudgetRow, BudgetStore } from './budget/budget-store.js';
+export { DrizzleBudgetStore } from './budget/drizzle-budget-store.js';
+export {
+  type BudgetScope,
+  type BudgetSubjectType,
+  resolveScopes,
+  scopeKey,
+} from './budget/scope.js';
+export {
+  BUDGET_WINDOWS,
+  type BudgetWindow,
+  secondsToWindowEnd,
+  TOTAL_WINDOW_RETRY_AFTER_SEC,
+  windowKeyFor,
+} from './budget/window.js';
+export {
   bumpCatalogVersion,
   CatalogStateMissingError,
   LLM_CATALOG_CHANNEL,
@@ -58,11 +78,31 @@ export {
   seal,
 } from './crypto/sealed-box.js';
 export {
+  RATE_LIMIT_FALLBACK_RETRY_AFTER_SEC,
+  RATE_LIMIT_KEY_PREFIX,
+  RATE_LIMIT_WINDOW_MS,
+  type RateLimitDecision,
+  RouterRateLimiter,
+  type RouterRateLimiterOptions,
+  rateLimitKey,
+} from './guard/rate-limit.js';
+export {
+  aggregateBudgetDeltas,
+  type BudgetDelta,
+} from './metering/budget-delta.js';
+export {
   type CallRecord,
   type CallRecorder,
   InMemoryCallRecorder,
   NOOP_CALL_RECORDER,
 } from './metering/call-record.js';
+export {
+  BatchingCallRecorder,
+  type BatchingCallRecorderOptions,
+  type CallRecorderStats,
+} from './metering/call-recorder.js';
+export type { CallStore } from './metering/call-store.js';
+export { DrizzleCallStore } from './metering/drizzle-call-store.js';
 export { classifyFetchError, type ForwardInput, forward } from './proxy/forward.js';
 export {
   buildUpstreamHeaders,
@@ -76,6 +116,7 @@ export {
 } from './proxy/openai-stream-options.js';
 export {
   type CallStatus,
+  DEFAULT_RETRY_AFTER_SEC,
   ROUTER_ERRORS,
   type RouterErrorKind,
   type RouterErrorSpec,

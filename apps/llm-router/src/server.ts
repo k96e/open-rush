@@ -13,17 +13,37 @@
 import { serve } from '@hono/node-server';
 import { createNotificationListener, getDbClient } from '@open-rush/db';
 import {
+  BatchingCallRecorder,
+  BudgetService,
+  type CallRecorder,
   CatalogCache,
+  DrizzleBudgetStore,
+  DrizzleCallStore,
   DrizzleCatalogStore,
   DrizzleTokenStore,
   loadRouterPrivateKey,
   NOOP_CALL_RECORDER,
+  RouterRateLimiter,
   TokenAuthenticator,
 } from '@open-rush/llm-router';
 import { createLogger } from '@open-rush/observability';
+import { createRedisClient } from '@open-rush/stream';
 import { createApp } from './app.js';
+import type { BudgetGate, RateLimitGate } from './deps.js';
 
 const log = createLogger({ service: 'llm-router' });
+
+/** `'false'` 才算关；其余（含未设置）都算开。 */
+function envFlag(name: string, defaultOn: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return defaultOn;
+  return raw !== 'false' && raw !== '0';
+}
+
+function envNumber(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
 
 export async function main(): Promise<void> {
   // ① 私钥 fail-fast。只打指纹，绝不打任何密钥材料。
@@ -45,12 +65,54 @@ export async function main(): Promise<void> {
     onTouchError: (err) => log.warn({ err: String(err) }, 'failed to touch token last_used_at'),
   });
 
+  // ③ 计量（M5·T5.1）。关掉时装 NOOP——转发路径的代码一行都不变。
+  const batching = envFlag('LLM_ROUTER_METERING_ENABLED', true)
+    ? new BatchingCallRecorder(new DrizzleCallStore(db), {
+        batchSize: envNumber('LLM_ROUTER_METERING_BATCH_SIZE', 100),
+        flushIntervalMs: envNumber('LLM_ROUTER_METERING_FLUSH_MS', 1_000),
+        maxQueue: envNumber('LLM_ROUTER_METERING_MAX_QUEUE', 10_000),
+        onError: (err, size) =>
+          log.error({ err: String(err), size }, 'metering batch flush failed, records dropped'),
+      })
+    : null;
+  batching?.start();
+  const recorder: CallRecorder = batching ?? NOOP_CALL_RECORDER;
+
+  // ④ 两道闸门。**互相独立**（A6）：任一装配失败或关闭，都不影响另一道。
+  const budget: BudgetGate | undefined = envFlag('LLM_ROUTER_BUDGET_ENABLED', true)
+    ? new BudgetService(new DrizzleBudgetStore(db), {
+        cacheTtlMs: envNumber('LLM_ROUTER_BUDGET_CACHE_MS', 10_000),
+        onError: (err) => log.warn({ err: String(err) }, 'budget lookup failed, allowing request'),
+      })
+    : undefined;
+
+  let rateLimiter: RateLimitGate | undefined;
+  if (envFlag('LLM_ROUTER_RATE_LIMIT_ENABLED', false)) {
+    const redis = createRedisClient({
+      url: process.env.REDIS_URL,
+      sentinels: process.env.REDIS_SENTINELS,
+      masterName: process.env.REDIS_MASTER_NAME,
+      password: process.env.REDIS_PASSWORD,
+    });
+    if (redis) {
+      rateLimiter = new RouterRateLimiter({
+        redis,
+        defaultRpm: envNumber('LLM_ROUTER_RATE_LIMIT_RPM', 600),
+        onError: (err) => log.warn({ err: String(err) }, 'rate limiter degraded, allowing request'),
+      });
+    } else {
+      // 开关开着却没有 Redis：不能静默当成「限流生效了」。
+      log.warn({}, 'rate limit enabled but no redis configured, running without rate limit');
+    }
+  }
+
   let draining = false;
   const app = createApp({
     catalog,
     authenticator,
-    // M5·T5.1 换成 CallRecorder + DrizzleCallStore；在那之前逐调用明细不落库。
-    recorder: NOOP_CALL_RECORDER,
+    recorder,
+    rateLimiter,
+    budget,
     privateKeyPem: key.privateKeyPem,
     isDraining: () => draining,
     logger: log,
@@ -74,6 +136,8 @@ export async function main(): Promise<void> {
     );
     server.close();
     await catalog.stop();
+    // 排空计量队列——最后一批调用的账不该因为一次滚动更新就丢。
+    await batching?.drain();
     log.info({ signal }, 'llm-router stopped');
     process.exit(0);
   };

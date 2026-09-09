@@ -1,5 +1,5 @@
 /**
- * 本包单测用的最小 PGlite 库：只建 M2/M3/M4 触到的六张表。
+ * 本包单测用的最小 PGlite 库：只建 M2–M5 触到的那几张表。
  *
  * 与 `packages/control-plane` 的 drizzle-* 测试同款——就地写 DDL，不去 import
  * 另一个 package 的测试内部件。DDL 逐字对齐 `0012_llm_router.sql`（含 CHECK 与
@@ -124,6 +124,79 @@ export async function createTestDb(): Promise<{ db: TestDb; pglite: PGlite }> {
     sql`CREATE UNIQUE INDEX llm_router_tokens_hash_uniq ON llm_router_tokens (token_hash)`
   );
 
+  // M5·T5.1 的计量与预算三张表。
+  // **刻意不建 token_id / run_id 的外键**——同上，本包单测要证的是批写的事务
+  // 原子性与累加语义，级联行为由 `packages/db` 的 migration.test.ts 覆盖。
+  await db.execute(sql`
+    CREATE TABLE llm_calls (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      request_id VARCHAR(64),
+      token_id UUID,
+      subject_type VARCHAR(20) NOT NULL,
+      run_id UUID,
+      agent_id UUID,
+      project_id UUID,
+      owner_user_id UUID,
+      cc_session_id VARCHAR(128),
+      cc_agent_id VARCHAR(128),
+      model_alias VARCHAR(255) NOT NULL,
+      provider_id UUID,
+      upstream_model VARCHAR(255),
+      protocol VARCHAR(20) NOT NULL,
+      mode VARCHAR(20) NOT NULL,
+      stream BOOLEAN NOT NULL DEFAULT false,
+      status VARCHAR(30) NOT NULL,
+      http_status INTEGER,
+      error_code VARCHAR(50),
+      tokens_in INTEGER NOT NULL DEFAULT 0,
+      tokens_cache_write INTEGER NOT NULL DEFAULT 0,
+      tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+      tokens_out INTEGER NOT NULL DEFAULT 0,
+      tokens_reasoning INTEGER NOT NULL DEFAULT 0,
+      cost_usd NUMERIC(12, 6) NOT NULL DEFAULT '0',
+      ttfb_ms INTEGER,
+      latency_ms INTEGER,
+      started_at TIMESTAMPTZ NOT NULL,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE llm_budgets (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subject_type VARCHAR(20) NOT NULL,
+      subject_id UUID,
+      "window" VARCHAR(20) NOT NULL,
+      limit_usd NUMERIC(12, 6) NOT NULL,
+      enforce BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT llm_budgets_subject_window_idx
+        UNIQUE NULLS NOT DISTINCT (subject_type, subject_id, "window"),
+      CONSTRAINT llm_budgets_subject_type_check
+        CHECK (subject_type IN ('global','project','user','agent')),
+      CONSTRAINT llm_budgets_window_check CHECK ("window" IN ('day','month','total'))
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE llm_budget_usage (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subject_type VARCHAR(20) NOT NULL,
+      subject_id UUID,
+      window_key VARCHAR(20) NOT NULL,
+      cost_usd NUMERIC(14, 6) NOT NULL DEFAULT '0',
+      tokens BIGINT NOT NULL DEFAULT 0,
+      calls INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT llm_budget_usage_subject_window_uniq
+        UNIQUE NULLS NOT DISTINCT (subject_type, subject_id, window_key),
+      CONSTRAINT llm_budget_usage_subject_type_check
+        CHECK (subject_type IN ('global','project','user','agent'))
+    )
+  `);
+
   // migration 末尾的种子行——版本位必须存在，bumpCatalogVersion 只写 WHERE id = 1。
   await db.execute(sql`INSERT INTO llm_catalog_state (id, version) VALUES (1, 0)`);
 
@@ -134,10 +207,10 @@ export async function closeTestDb(pglite: PGlite): Promise<void> {
   await pglite.close();
 }
 
-/** 清空 M2/M3/M4 相关表并重播 `llm_catalog_state` 种子行。 */
+/** 清空 M2–M5 相关表并重播 `llm_catalog_state` 种子行。 */
 export async function truncateAll(db: TestDb): Promise<void> {
   await db.execute(
-    sql`TRUNCATE TABLE llm_router_tokens, llm_models, llm_providers, llm_credentials, llm_catalog_state, users RESTART IDENTITY CASCADE`
+    sql`TRUNCATE TABLE llm_calls, llm_budget_usage, llm_budgets, llm_router_tokens, llm_models, llm_providers, llm_credentials, llm_catalog_state, users RESTART IDENTITY CASCADE`
   );
   await db.execute(sql`INSERT INTO llm_catalog_state (id, version) VALUES (1, 0)`);
 }

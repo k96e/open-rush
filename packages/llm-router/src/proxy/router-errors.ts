@@ -95,10 +95,17 @@ export const ROUTER_ERRORS: Readonly<Record<RouterErrorKind, RouterErrorSpec>> =
 };
 
 export interface RouterErrorOptions {
-  /** 429 一律带 `Retry-After`（秒）。 */
+  /**
+   * `Retry-After`（秒）。**429 一律要带**（R5 §6.2）：限流取滑动窗口剩余时间，
+   * 预算取到窗口边界的秒数。429 而调用点没给值时，兜底成
+   * {@link DEFAULT_RETRY_AFTER_SEC}——少一个头会让 Claude Code 退化成固定间隔重试。
+   */
   retryAfterSec?: number;
   requestId?: string;
 }
+
+/** 429 缺省的 `Retry-After`。只在调用点漏传时兜底，正常路径都会给真实值。 */
+export const DEFAULT_RETRY_AFTER_SEC = 60;
 
 /** 按调用方协议成形的错误体。两种形状都用各自生态里客户端认得的字段名。 */
 export function routerErrorBody(
@@ -126,8 +133,10 @@ export function routerErrorResponse(
 ): Response {
   const spec = ROUTER_ERRORS[kind];
   const headers = new Headers({ 'content-type': 'application/json' });
-  if (opts.retryAfterSec !== undefined) {
-    headers.set('retry-after', String(Math.max(0, Math.ceil(opts.retryAfterSec))));
+  const retryAfterSec =
+    opts.retryAfterSec ?? (spec.httpStatus === 429 ? DEFAULT_RETRY_AFTER_SEC : undefined);
+  if (retryAfterSec !== undefined) {
+    headers.set('retry-after', String(Math.max(0, Math.ceil(retryAfterSec))));
   }
   if (opts.requestId) headers.set('x-request-id', opts.requestId);
   return new Response(JSON.stringify(routerErrorBody(protocol, kind, message)), {

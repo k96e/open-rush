@@ -193,8 +193,11 @@ const providerEnv: Record<string, string | undefined> = {
 - llm-router 逐调用写 `llm_calls`：subject（来自令牌）、alias、协议、模式、token 四类计数、`cost_usd`、TTFB、总耗时、状态。**异步批写，失败只记日志不阻塞转发。**
 - control-worker 在 run 收敛时聚合 `llm_calls` 回写 `data-openrush-usage` 事件——该事件的 zod schema 早已存在于 `packages/contracts/src/v1/runs.ts`，但在本课题之前**没有任何生产者**。所以这是"从零到有"，不是升级。
 - 预算：`llm_budgets`（作用域 `global` / `project` / `user` / `agent`，窗口 `day` / `month` / `total`）+ `llm_budget_usage` DB 累计器 + 进程内缓存，两档开关 `observe`（只记不拦）/ `enforce`（拦截）。作用域解析优先级 `agent → project → user → global`，取最近的一档。
-- 限流：复用 `packages/agent-runtime` 的 `RedisRateLimiter`（Redis Lua 滑动窗口，多副本共享），key = subject。
-- 两个开关**互相独立**：限流开/预算关、限流关/预算开都必须各自正确。
+- 限流：复用 `packages/agent-runtime` 的 `RedisRateLimiter`（Redis Lua 滑动窗口，多副本共享），key = subject（有项目归属取 `project:<id>`，否则 `token:<id>`）。
+- 两个开关**互相独立**：限流开/预算关、限流关/预算开都必须各自正确。开关即「是否装配闸门」——`LLM_ROUTER_RATE_LIMIT_ENABLED`（默认 false）与 `LLM_ROUTER_BUDGET_ENABLED`（默认 true）。
+- **预算是软限额**：判定读的是进程内缓存的累计值（`LLM_ROUTER_BUDGET_CACHE_MS`，默认 10s），高并发下可能超出限额一个 TTL 内的少量金额。把每次调用都做成强一致事务会给转发路径加一次同步写，与「极薄」正相反；需要硬限额时把 TTL 设为 0。**此取舍必须写进验收报告。**
+- **两道闸门都可用性优先**：Redis 不可达时限流降级为**放行**并告警，预算查库失败同样**放行**并告警。闸门是止损手段，让一次基础设施抖动把所有 LLM 调用打死是更坏的结果；账的可靠性由累计器（与转发路径解耦的旁路）保证，不由闸门保证。
+- 计量与两道闸门的**位置**：限流在中间件层、认证之后、body 解析之前（尽早卸载）；预算在路由解析之后（被拦下的那条 `llm_calls` 因此带得上 alias 与 provider）。两者的拒绝都落一条 `llm_calls`（`rate_limited` / `budget_exceeded`），否则被拦满的令牌在报表里会完全隐身。
 
 ---
 

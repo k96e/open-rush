@@ -17,6 +17,7 @@
     "@open-rush/db": "workspace:*",
     "@open-rush/llm-router": "workspace:*",
     "@open-rush/observability": "workspace:*",
+    "@open-rush/stream": "workspace:*",
     "hono": "^4.7.0"
   },
   "devDependencies": {

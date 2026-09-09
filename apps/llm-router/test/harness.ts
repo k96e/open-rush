@@ -8,11 +8,13 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
+  type BudgetDecision,
   type CatalogCredential,
   type CatalogModel,
   type CatalogProvider,
   generateRouterKeyPair,
   InMemoryCallRecorder,
+  type RateLimitDecision,
   type Snapshot,
   type Subject,
   seal,
@@ -165,6 +167,12 @@ export interface Harness {
   setSubject(subject: Subject | null): void;
   setSnapshot(snapshot: Snapshot | null): void;
   setDraining(value: boolean): void;
+  /** 传 null 关掉限流闸门（等价于开关关闭）。 */
+  setRateLimit(decision: RateLimitDecision | null): void;
+  /** 传 null 关掉预算闸门。 */
+  setBudget(decision: BudgetDecision | null): void;
+  /** 两道闸门各自被调用了几次——用来证「开关关闭时不生效」。 */
+  gateCalls: { rateLimit: number; budget: number };
   fetch(path: string, init?: RequestInit): Promise<Response>;
   close(): Promise<void>;
 }
@@ -188,6 +196,11 @@ export async function createHarness(
   let draining = false;
   const recorder = new InMemoryCallRecorder();
 
+  // 两道闸门默认**不装配**（= 开关关闭），与 M4 的行为完全一致。
+  let rateLimitDecision: RateLimitDecision | null = null;
+  let budgetDecision: BudgetDecision | null = null;
+  const gateCalls = { rateLimit: 0, budget: 0 };
+
   const deps: RouterDeps = {
     catalog: {
       get current() {
@@ -196,6 +209,24 @@ export async function createHarness(
     },
     authenticator: { authenticate: async () => subject },
     recorder,
+    get rateLimiter() {
+      if (!rateLimitDecision) return undefined;
+      return {
+        check: async () => {
+          gateCalls.rateLimit += 1;
+          return rateLimitDecision as RateLimitDecision;
+        },
+      };
+    },
+    get budget() {
+      if (!budgetDecision) return undefined;
+      return {
+        check: async () => {
+          gateCalls.budget += 1;
+          return budgetDecision as BudgetDecision;
+        },
+      };
+    },
     privateKeyPem: KEYPAIR.privateKeyPem,
     isDraining: () => draining,
   };
@@ -216,6 +247,13 @@ export async function createHarness(
     setDraining(value) {
       draining = value;
     },
+    setRateLimit(decision) {
+      rateLimitDecision = decision;
+    },
+    setBudget(decision) {
+      budgetDecision = decision;
+    },
+    gateCalls,
     fetch: async (path, init) =>
       app.fetch(
         new Request(`http://router.test${path}`, {

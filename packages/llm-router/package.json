@@ -28,6 +28,7 @@
     "clean": "rm -rf dist node_modules coverage"
   },
   "dependencies": {
+    "@open-rush/agent-runtime": "workspace:*",
     "@open-rush/contracts": "workspace:*",
     "@open-rush/db": "workspace:*",
     "drizzle-orm": "^0.45.2"

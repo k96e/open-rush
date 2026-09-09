@@ -12,6 +12,7 @@ import { createHonoMiddleware } from '@open-rush/observability/hono';
 import { Hono } from 'hono';
 import type { RouterDeps, RouterEnv } from './deps.js';
 import { authenticate } from './middleware/authenticate.js';
+import { RATE_LIMITED_PATHS, rateLimit } from './middleware/rate-limit.js';
 import { chatCompletionsRoutes } from './routes/chat-completions.js';
 import { messagesRoutes } from './routes/messages.js';
 import { modelsRoutes } from './routes/models.js';
@@ -50,6 +51,8 @@ export function createApp(deps: RouterDeps): Hono<RouterEnv> {
 
   // —— 业务面：全部要令牌（D12「没有钥匙就没有门」）——
   app.use('/v1/*', authenticate(deps.authenticator));
+  // 限流只挂推理路由：模型发现不烧钱，被配额挡住只会让 Claude Code 起不来。
+  for (const path of RATE_LIMITED_PATHS) app.use(path, rateLimit(deps));
   app.route('/v1', messagesRoutes(deps));
   app.route('/v1', chatCompletionsRoutes(deps));
   app.route('/v1', modelsRoutes(deps));

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_RETRY_AFTER_SEC,
   ROUTER_ERRORS,
   type RouterErrorKind,
   routerErrorBody,
@@ -79,6 +80,26 @@ describe('routerErrorResponse', () => {
     expect(
       routerErrorResponse('anthropic', 'upstream_error', 'x').headers.get('retry-after')
     ).toBeNull();
+  });
+
+  it('★ 429 一律带 Retry-After：调用点漏传时兜底（M5·T5.4）', () => {
+    for (const kind of ['rate_limited', 'budget_exceeded'] as const) {
+      for (const face of ['anthropic', 'openai'] as const) {
+        const res = routerErrorResponse(face, kind, 'over');
+        expect(res.status, `${face}/${kind}`).toBe(429);
+        expect(res.headers.get('retry-after'), `${face}/${kind}`).toBe(
+          String(DEFAULT_RETRY_AFTER_SEC)
+        );
+      }
+    }
+  });
+
+  it('显式给了 Retry-After 就用显式值，不被兜底覆盖', () => {
+    expect(
+      routerErrorResponse('anthropic', 'budget_exceeded', 'over', { retryAfterSec: 7 }).headers.get(
+        'retry-after'
+      )
+    ).toBe('7');
   });
 
   it('带上 x-request-id 便于两侧日志对齐', () => {

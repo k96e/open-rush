@@ -10,7 +10,7 @@
  * 下一次路由决策就用新目录——不重启、不改代码。
  */
 import { v1 } from '@open-rush/contracts';
-import { CatalogConflictError, CatalogReferenceError } from '@open-rush/llm-router';
+import { CatalogConflictError, CatalogReferenceError } from '@open-rush/llm-router/store';
 
 import { v1Error, v1Success, v1ValidationError } from '@/lib/api/v1-responses';
 

@@ -18,7 +18,7 @@ import {
   DrizzleProviderStore,
   type ModelRow,
   type ProviderRow,
-} from '@open-rush/llm-router';
+} from '@open-rush/llm-router/store';
 
 import { v1Error } from '@/lib/api/v1-responses';
 import { type AuthContext, authenticate, hasScope } from '@/lib/auth/unified-auth';

@@ -36,7 +36,7 @@ vi.mock('@/lib/auth/unified-auth', () => ({
 
 vi.mock('@open-rush/db', () => ({ getDbClient: () => ({}) }));
 
-vi.mock('@open-rush/llm-router', () => ({
+vi.mock('@open-rush/llm-router/store', () => ({
   bumpCatalogVersion: (db: unknown) => mockBumpCatalogVersion(db),
   DrizzleProviderStore: class {
     create = mockCreate;

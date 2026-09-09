@@ -19,13 +19,12 @@
  */
 import type { v1 } from '@open-rush/contracts';
 import { getDbClient } from '@open-rush/db';
+import { type SealedEnvelope, seal } from '@open-rush/llm-router/sealing';
 import {
   bumpCatalogVersion,
   type CredentialSummary,
   DrizzleCredentialStore,
-  type SealedEnvelope,
-  seal,
-} from '@open-rush/llm-router';
+} from '@open-rush/llm-router/store';
 
 import { v1Error } from '@/lib/api/v1-responses';
 

@@ -35,8 +35,11 @@ vi.mock('@open-rush/db', () => ({
 
 // 真实的 seal 会被单独测（packages/llm-router）；这里替身让我们能断言
 // 「明文只作为 seal 的入参出现过一次」。
-vi.mock('@open-rush/llm-router', () => ({
+vi.mock('@open-rush/llm-router/sealing', () => ({
   seal: (pem: string, plaintext: string) => mockSeal(pem, plaintext),
+}));
+
+vi.mock('@open-rush/llm-router/store', () => ({
   bumpCatalogVersion: (db: unknown) => mockBumpCatalogVersion(db),
   DrizzleCredentialStore: class {
     create = mockCreate;
@@ -242,7 +245,7 @@ describe('POST /api/v1/llm/credentials', () => {
   });
 
   it('409 VERSION_CONFLICT on a duplicate name', async () => {
-    const { CredentialNameConflictError } = await import('@open-rush/llm-router');
+    const { CredentialNameConflictError } = await import('@open-rush/llm-router/store');
     mockCreate.mockRejectedValue(new CredentialNameConflictError('anthropic-prod'));
     const res = await POST(jsonReq('POST', validBody()));
     expect(res.status).toBe(409);

@@ -11,7 +11,7 @@
  * 目录热变更（D7）：写成功后必须 `bumpCatalogVersion`。
  */
 import { v1 } from '@open-rush/contracts';
-import { CatalogConflictError, CatalogReferenceError } from '@open-rush/llm-router';
+import { CatalogConflictError, CatalogReferenceError } from '@open-rush/llm-router/store';
 
 import { v1Error, v1Paginated, v1Success, v1ValidationError } from '@/lib/api/v1-responses';
 

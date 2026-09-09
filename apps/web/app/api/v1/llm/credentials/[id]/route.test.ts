@@ -24,8 +24,11 @@ vi.mock('@/lib/auth/unified-auth', () => ({
 
 vi.mock('@open-rush/db', () => ({ getDbClient: () => ({}) }));
 
-vi.mock('@open-rush/llm-router', () => ({
+vi.mock('@open-rush/llm-router/sealing', () => ({
   seal: vi.fn(),
+}));
+
+vi.mock('@open-rush/llm-router/store', () => ({
   bumpCatalogVersion: (db: unknown) => mockBumpCatalogVersion(db),
   DrizzleCredentialStore: class {
     deleteById = mockDeleteById;
@@ -92,7 +95,7 @@ describe('DELETE /api/v1/llm/credentials/:id', () => {
   });
 
   it('409 when the credential is still referenced by providers', async () => {
-    const { CredentialInUseError } = await import('@open-rush/llm-router');
+    const { CredentialInUseError } = await import('@open-rush/llm-router/store');
     mockDeleteById.mockRejectedValue(new CredentialInUseError(ID, 2));
     const res = await DELETE(req(), ctx());
     expect(res.status).toBe(409);

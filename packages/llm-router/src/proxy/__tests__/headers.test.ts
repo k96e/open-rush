@@ -180,6 +180,46 @@ describe('buildUpstreamHeaders', () => {
   });
 });
 
+describe('buildUpstreamHeaders · crossProtocol（T4.7）', () => {
+  const inbound = new Headers({
+    'content-type': 'application/json',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'context-management-2025-06-27,some-future-beta',
+    'anthropic-workspace-id': 'ws-1',
+    'x-custom': 'kept',
+  });
+
+  it('★ 跨协议时剥掉所有 anthropic-*（OpenAI 上游不认，严格实现会 400）', () => {
+    const out = buildUpstreamHeaders(inbound, makeRoute({ credential: null }), null, REQ_ID, {
+      crossProtocol: true,
+    });
+    expect(out.get('anthropic-version')).toBeNull();
+    expect(out.get('anthropic-beta')).toBeNull();
+    expect(out.get('anthropic-workspace-id')).toBeNull();
+    // 非 Anthropic 专有的头照常按开放列表转发。
+    expect(out.get('content-type')).toBe('application/json');
+    expect(out.get('x-custom')).toBe('kept');
+    expect(out.get('accept-encoding')).toBe('identity');
+  });
+
+  it('默认（同协议）不剥：开放列表原则原封不动', () => {
+    const out = buildUpstreamHeaders(inbound, makeRoute({ credential: null }), null, REQ_ID);
+    expect(out.get('anthropic-beta')).toBe('context-management-2025-06-27,some-future-beta');
+    expect(out.get('anthropic-version')).toBe('2023-06-01');
+  });
+
+  it('跨协议也照常按 authStyle 注入凭据', () => {
+    const out = buildUpstreamHeaders(
+      inbound,
+      makeRoute({ credential: makeCredential('sk-openai', { authStyle: 'bearer' }) }),
+      'sk-openai',
+      REQ_ID,
+      { crossProtocol: true }
+    );
+    expect(out.get('authorization')).toBe('Bearer sk-openai');
+  });
+});
+
 describe('stripHopByHop', () => {
   it('剥掉响应侧的 hop-by-hop 头', () => {
     const out = stripHopByHop(

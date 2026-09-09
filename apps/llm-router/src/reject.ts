@@ -29,6 +29,11 @@ export interface RejectionInput {
   stream: boolean;
   errorCode: string;
   route?: ResolvedRoute;
+  /**
+   * 覆盖记进 `llm_calls.mode` 的值。跨协议翻译在请求阶段就被拒时要记 `translate`
+   * ——`route.mode` 只描述同协议的两档，照抄会把一次翻译失败记成 passthrough。
+   */
+  mode?: CallRecord['mode'];
   /** 429 专用。缺省由 `routerErrorResponse` 兜底成 60s。 */
   retryAfterSec?: number;
   startedAt: Date;
@@ -57,7 +62,7 @@ export function reject(input: RejectionInput): Response {
       providerId: route?.provider.id ?? null,
       upstreamModel: route?.model.upstreamModel ?? null,
       protocol: route?.provider.protocol ?? face,
-      mode: route?.mode ?? 'passthrough',
+      mode: input.mode ?? route?.mode ?? 'passthrough',
       stream: input.stream,
       status: spec.callStatus,
       httpStatus: spec.httpStatus,

@@ -8,6 +8,38 @@
  * 调用。apps/web 与 packages/control-plane 里出现它们即违反 A11，
  * `scripts/audit-no-plaintext-key.sh`（M7·T7.3）会 grep 到。
  */
+export {
+  flattenSystem,
+  flattenToolResult,
+  translateAnthropicRequest,
+  translateToolChoice,
+  translateTools,
+} from './adapters/anthropic-to-openai.js';
+export {
+  type AnthropicUsage,
+  FINISH_REASON_MAP,
+  mapFinishReason,
+  OpenAiToAnthropicStreamTranslator,
+  type StreamTranslatorOptions,
+  translateOpenAiCompletion,
+  translateUsage,
+} from './adapters/openai-to-anthropic.js';
+export {
+  anthropicToOpenAiTranslator,
+  type SelectTranslatorOptions,
+  selectTranslator,
+} from './adapters/select-translator.js';
+export { pingEvent, sseEvent } from './adapters/sse.js';
+export {
+  DEFAULT_PING_INTERVAL_MS,
+  type TranslateStreamOptions,
+  translateOpenAiStreamToAnthropic,
+} from './adapters/translate-stream.js';
+export {
+  ProtocolTranslateError,
+  type ProtocolTranslator,
+  type TranslateRequestOptions,
+} from './adapters/types.js';
 export { DrizzleTokenStore } from './auth/drizzle-token-store.js';
 export {
   extractToken,
@@ -114,6 +146,7 @@ export {
   buildUpstreamHeaders,
   extractGroupingHints,
   stripHopByHop,
+  type UpstreamHeaderOptions,
 } from './proxy/headers.js';
 export { ModelRewriteError, rewriteModelField } from './proxy/model-rewrite.js';
 export {

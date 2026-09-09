@@ -18,6 +18,9 @@ export function chatCompletionsRoutes(deps: RouterDeps): Hono<RouterEnv> {
       face: 'openai',
       allowStream: true,
       injectUsageOnStream: true,
+      // 反方向（OpenAI 面 → Anthropic 上游）本次未交付，`selectTranslator` 也会
+      // 返回 null；这里写明白，免得后来者以为是漏配。
+      allowTranslate: true,
     })
   );
 

@@ -244,7 +244,43 @@ describe('POST /v1/messages · 拒绝路径', () => {
     expect(harness.upstream.requests).toHaveLength(0);
   });
 
-  it('★ 上游是 OpenAI 协议时，Anthropic 面拒绝路由（translate 是 T4.7）', async () => {
+  /**
+   * T4.7 之前这里断言的是 404：跨协议一律拒绝。翻译交付之后行为**有意改变**
+   * ——同一份目录现在会走 translate 档转给 OpenAI 上游。完整的翻译用例在
+   * `translate.test.ts`；这里只钉住「跨协议不再是拒绝路径」这一条，
+   * 免得将来有人把 404 当成回归给「修」回去。
+   */
+  it('★ 上游是 OpenAI 协议时走 translate 档，不再拒绝（T4.7）', async () => {
+    harness.setSnapshot(
+      makeSnapshot({
+        models: [makeModel()],
+        providers: [
+          {
+            id: 'prov-1',
+            name: 'openai-prod',
+            protocol: 'openai',
+            baseUrl: harness.upstream.baseUrl,
+            credentialId: 'cred-1',
+            defaultHeaders: {},
+            timeoutMs: 5000,
+          },
+        ],
+      })
+    );
+    harness.upstream.setHandler(
+      jsonResponder(
+        200,
+        '{"id":"c","model":"gpt-4o","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+      )
+    );
+    const res = await post({ model: 'claude-sonnet-4-6', messages: [] });
+    expect(res.status).toBe(200);
+    expect(harness.recorder.records[0]).toMatchObject({ mode: 'translate', status: 'success' });
+    expect(harness.upstream.requests[0].url).toBe('/v1/chat/completions');
+  });
+
+  it('★ 关掉翻译开关后跨协议回到 404 + PROTOCOL_FACE_MISMATCH', async () => {
+    harness.setTranslateEnabled(false);
     harness.setSnapshot(
       makeSnapshot({
         models: [makeModel()],

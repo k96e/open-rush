@@ -46,7 +46,7 @@ control-worker ──SSE①── agent-worker ── Claude Code CLI ──▶ 
 | # | 决策点 | 结论 | 理由 |
 |---|---|---|---|
 | D1 | 网关落位 | 独立服务 `apps/llm-router`（Hono，:8790），夹在 Claude Code CLI ↔ 供应商之间 | 双层 SSE 与状态机完全不经过网关；这正是官方 gateway 协议的接入点 |
-| D2 | 对外协议面 | 同时暴露 Anthropic Messages（`/v1/messages`）与 OpenAI（`/v1/chat/completions`）；上游适配分 `passthrough` / `translate` | "body 零改写"与"异构供应商"在跨协议时不可兼得，必须显式分层承诺 |
+| D2 | 对外协议面 | 同时暴露 Anthropic Messages（`/v1/messages`）与 OpenAI（`/v1/chat/completions`）；上游适配分 `passthrough` / `rewrite-model` / `translate` | "body 零改写"与"异构供应商"在跨协议时不可兼得，必须显式分层承诺 |
 | D2b | 模型名改写 | 默认 `alias == upstream_model` → 字节级零改写；异名时进入 `rewrite-model`，**只允许改 `$.model` 一个字段** | 把零改写的例外收敛成一个可被单测精确断言的点 |
 | D3 | 密钥盲写 | **非对称信封**：web 只持公钥 `LLM_ROUTER_PUBLIC_KEY`，llm-router 独占私钥 `LLM_ROUTER_PRIVATE_KEY`；算法 `X25519 + HKDF-SHA256 + AES-256-GCM`，Node 内置零依赖 | web 在物理上不具备解密能力；对称 KEK 做不到这点 |
 | D4 | 与既有 Vault 的关系 | **并存不耦合**：llm-router 凭据走 `llm_credentials` + 非对称信封，`vault_entries` 保持原样 | Vault 的对称 KEK 由部署侧持有、web 可解密，与"录入即盲写"根本冲突 |
@@ -71,15 +71,41 @@ control-worker ──SSE①── agent-worker ── Claude Code CLI ──▶ 
 |---|---|---|---|---|
 | `passthrough` | 调用方协议 == 上游协议，且 `alias == upstream_model` | **请求/响应 body 逐字节一致**；SSE 事件不丢不改序 | 旁路 tee | ✅ 必交 |
 | `rewrite-model` | 同协议，`alias != upstream_model` | 除 `$.model` 一个字段外，解析后对象**深度相等** | 旁路 tee | ✅ 必交 |
-| `translate` | 调用方协议 != 上游协议（Anthropic-in → OpenAI-out） | **不承诺零改写**；承诺语义等价 + 流式不丢事件 | 旁路 tee | 🟡 Stretch，可裁剪 |
+| `translate` | 调用方协议 != 上游协议（Anthropic-in → OpenAI-out） | **不承诺零改写**；承诺语义等价 + 流式不丢事件 | 旁路 tee，取样在**翻译之前** | ✅ 已交付 |
 
-`translate` 若被裁剪，必须在验收报告里如实说明，不得含糊为"尽量不改写"。
+`translate` 承诺的是语义等价，不得含糊为"尽量不改写"——已知的有损之处必须逐条列在验收报告里
+（完整清单见 `docs/plans/llm-router/ref/R9-协议翻译调研.md` §9.6）。
+
+### translate 的三条方向性约束
+
+1. **只有 Anthropic-in → OpenAI-out 一个方向。** 反方向（OpenAI 面的调用方打 Anthropic 上游）
+   不在交付内，路由层回 404 + `PROTOCOL_FACE_MISMATCH`。明确拒绝好过半成品的翻译——后者会在
+   语义等价性上给出兑现不了的承诺。
+2. **翻译只对 2xx 生效。** 上游 4xx/5xx 的 body 一个字节都不动，与 passthrough 同一条规矩
+   （见 §错误信封三分法）。Claude Code 的能力降级重试按上游错误文案匹配，翻一遍就等于换了文案。
+   代价是 Anthropic 面的调用方在出错时拿到 OpenAI 形状的错误体——两种形状都有 `error.message`，
+   文案匹配照常工作，这是刻意选的那一边。
+3. **跨协议时"开放列表"原则反过来。** 同协议路径上请求头与 body 字段一律开放转发；跨协议时改用
+   **封闭 allowlist**，并剥掉所有 `anthropic-*` 请求头。Claude Code 对不认识的模型名（网关 alias
+   正是）会照发 `thinking` / `context_management` / `output_config`，这些送给 OpenAI 上游只会换来
+   `400 Extra inputs are not permitted`。官方 gateway 文档对非 Anthropic 上游给的正是这条例外。
+
+**翻译流必须自己发 `ping`。** `ANTHROPIC_BASE_URL` 连接上有 300 秒字节级看门狗，而 OpenAI 兼容
+上游一个 ping 都不发；不补心跳，长思考与长工具参数生成期间流会被客户端判死。间隔由
+`LLM_ROUTER_TRANSLATE_PING_MS` 控制（默认 15s，空闲触发）。
+
+**退路**：`LLM_ROUTER_TRANSLATE_ENABLED=false` 让跨协议退回"这个面上没有这个模型"的 404。
+同协议两档不经过这一层，不受开关影响。
+
+**部署提示**：翻译必然重排 `system` 数组，Claude Code 的归属块剥离逻辑（按位置）因此失效，
+那段文本会进入上游的提示词与缓存键。走 translate 的部署应同时设
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0`。
 
 ### 透传的硬性细节
 
 - 上游响应 body **逐字节转发**，包括 SSE `ping` 事件与注释行——Claude Code 有 300 秒字节级看门狗，缓冲或吞掉 ping 会中断长思考期间的流。
 - 向上游发 `accept-encoding: identity`，不请求压缩，避免解压/再压导致字节不一致。
-- 请求头走**开放列表**转发（`anthropic-*` / `x-claude-code-*` 默认转发），**禁止白名单过滤**——过滤会在 Claude Code 新版本发布时静默打断新能力。
+- 请求头走**开放列表**转发（`anthropic-*` / `x-claude-code-*` 默认转发），**禁止白名单过滤**——过滤会在 Claude Code 新版本发布时静默打断新能力。跨协议（`translate`）是唯一的例外，见上。
 - `Authorization` / `x-api-key` 是 router 令牌，**消费掉，绝不转发上游**；hop-by-hop 头（`connection` / `transfer-encoding` / `keep-alive` / `upgrade` / `te` / `trailer` / `proxy-*`）剥离。
 
 ---

@@ -25,7 +25,7 @@ export interface CallRecord {
   providerId: string | null;
   upstreamModel: string | null;
   protocol: CatalogProtocol;
-  /** `translate` 由 T4.7 才会用到；M4 只产出 passthrough / rewrite-model。 */
+  /** `translate` 是跨协议翻译（T4.7）；同协议只会是 passthrough / rewrite-model。 */
   mode: CatalogRouteMode | 'translate';
   stream: boolean;
   status: CallStatus;

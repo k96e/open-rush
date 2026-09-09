@@ -122,6 +122,9 @@ export async function main(): Promise<void> {
     rateLimiter,
     budget,
     privateKeyPem: key.privateKeyPem,
+    // ⑤ 跨协议翻译（T4.7）。默认开；关掉后跨协议回 404，行为退回 M4。
+    translateEnabled: envFlag('LLM_ROUTER_TRANSLATE_ENABLED', true),
+    translatePingMs: envNumber('LLM_ROUTER_TRANSLATE_PING_MS', 15_000),
     isDraining: () => draining,
     logger: log,
   });

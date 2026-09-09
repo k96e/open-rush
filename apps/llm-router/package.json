@@ -1,0 +1,29 @@
+{
+  "name": "@open-rush/llm-router-service",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup src/server.ts --format esm --dts",
+    "dev": "tsx watch --env-file-if-exists=.env.local src/server.ts",
+    "start": "node dist/server.js",
+    "check": "tsc --noEmit",
+    "lint": "biome check .",
+    "test": "vitest run",
+    "clean": "rm -rf dist node_modules coverage"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@open-rush/db": "workspace:*",
+    "@open-rush/llm-router": "workspace:*",
+    "@open-rush/observability": "workspace:*",
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "vitest": "^4.0.0"
+  }
+}

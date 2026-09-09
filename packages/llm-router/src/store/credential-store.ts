@@ -174,7 +174,7 @@ export class DrizzleCredentialStore {
   }
 
   /**
-   * **仅供 llm-router 转发路径**：连密文一起取出，交给 `openSealed` 在栈上解封。
+   * **仅供 llm-router 转发路径**：连密文一起取出，由网关在栈上解封。
    * apps/web 不得调用——web 侧没有私钥，拿到密文也只是徒增泄漏面。
    */
   async findSealedById(

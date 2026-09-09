@@ -8,6 +8,16 @@
  * 调用。apps/web 与 packages/control-plane 里出现它们即违反 A11，
  * `scripts/audit-no-plaintext-key.sh`（M7·T7.3）会 grep 到。
  */
+export { DrizzleTokenStore } from './auth/drizzle-token-store.js';
+export {
+  extractToken,
+  hashRouterToken,
+  mintRouterToken,
+  ROUTER_TOKEN_PREFIX,
+  TokenAuthenticator,
+  type TokenAuthenticatorOptions,
+} from './auth/router-token.js';
+export { isAliasAllowed, type Subject, type TokenStore } from './auth/token-store.js';
 export {
   bumpCatalogVersion,
   CatalogStateMissingError,
@@ -47,6 +57,32 @@ export {
   type SealedEnvelope,
   seal,
 } from './crypto/sealed-box.js';
+export {
+  type CallRecord,
+  type CallRecorder,
+  InMemoryCallRecorder,
+  NOOP_CALL_RECORDER,
+} from './metering/call-record.js';
+export { classifyFetchError, type ForwardInput, forward } from './proxy/forward.js';
+export {
+  buildUpstreamHeaders,
+  extractGroupingHints,
+  stripHopByHop,
+} from './proxy/headers.js';
+export { ModelRewriteError, rewriteModelField } from './proxy/model-rewrite.js';
+export {
+  type InjectResult,
+  injectStreamIncludeUsage,
+} from './proxy/openai-stream-options.js';
+export {
+  type CallStatus,
+  ROUTER_ERRORS,
+  type RouterErrorKind,
+  type RouterErrorSpec,
+  routerErrorBody,
+  routerErrorResponse,
+} from './proxy/router-errors.js';
+export { type TeeHooks, teeForMetering } from './proxy/sse-tee.js';
 export { CatalogConflictError, CatalogReferenceError } from './store/catalog-errors.js';
 export {
   type CreateCredentialInput,
@@ -82,3 +118,17 @@ export {
   type PatchProviderInput,
   type ProviderRow,
 } from './store/provider-store.js';
+export { AnthropicSseUsageParser } from './usage/anthropic-parser.js';
+export {
+  computeCostUsd,
+  formatMicrosUsd,
+  type ModelPricing,
+  parsePriceToMicros,
+} from './usage/cost.js';
+export { OpenAiSseUsageParser } from './usage/openai-parser.js';
+export {
+  EMPTY_WIRE_USAGE,
+  type UsageParser,
+  type UsageResult,
+  type WireUsage,
+} from './usage/types.js';

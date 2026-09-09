@@ -25,8 +25,11 @@ vi.mock('@/lib/auth/unified-auth', () => ({
 
 vi.mock('@open-rush/db', () => ({ getDbClient: () => ({}) }));
 
-vi.mock('@open-rush/llm-router', () => ({
+vi.mock('@open-rush/llm-router/sealing', () => ({
   seal: (pem: string, plaintext: string) => mockSeal(pem, plaintext),
+}));
+
+vi.mock('@open-rush/llm-router/store', () => ({
   bumpCatalogVersion: (db: unknown) => mockBumpCatalogVersion(db),
   DrizzleCredentialStore: class {
     rotate = mockRotate;

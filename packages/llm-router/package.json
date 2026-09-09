@@ -8,10 +8,20 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./sealing": {
+      "types": "./dist/sealing.d.ts",
+      "import": "./dist/sealing.js",
+      "require": "./dist/sealing.cjs"
+    },
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "import": "./dist/store.js",
+      "require": "./dist/store.cjs"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts",
+    "build": "tsup",
     "check": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run",

@@ -10,7 +10,7 @@
  * 看不到这个 provider。
  */
 import { v1 } from '@open-rush/contracts';
-import { CatalogConflictError, CatalogReferenceError } from '@open-rush/llm-router';
+import { CatalogConflictError, CatalogReferenceError } from '@open-rush/llm-router/store';
 
 import { v1Error, v1Paginated, v1Success, v1ValidationError } from '@/lib/api/v1-responses';
 

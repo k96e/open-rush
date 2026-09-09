@@ -27,7 +27,7 @@
  */
 
 import { v1 } from '@open-rush/contracts';
-import { CredentialNameConflictError } from '@open-rush/llm-router';
+import { CredentialNameConflictError } from '@open-rush/llm-router/store';
 
 import { v1Error, v1Paginated, v1Success, v1ValidationError } from '@/lib/api/v1-responses';
 import { authenticate, hasScope } from '@/lib/auth/unified-auth';

@@ -12,7 +12,7 @@
  * 不存在的凭据转发。
  */
 import { v1 } from '@open-rush/contracts';
-import { CredentialInUseError } from '@open-rush/llm-router';
+import { CredentialInUseError } from '@open-rush/llm-router/store';
 
 import { v1Error, v1Success, v1ValidationError } from '@/lib/api/v1-responses';
 import { authenticate, hasScope } from '@/lib/auth/unified-auth';

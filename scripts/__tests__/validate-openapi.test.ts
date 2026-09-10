@@ -115,7 +115,7 @@ describe('validate-openapi — real spec smoke', () => {
     expect(report.counts.refs).toBeGreaterThan(0);
   });
 
-  it('enumerates 26 required operations (Auth 3 + AgentDefinition 6 + Agent 4 + Run 5 + Vault 3 + Registry 2 + Project 3)', () => {
+  it('enumerates 40 required operations (Auth 3 + AgentDefinition 6 + Agent 4 + Run 5 + Vault 3 + Registry 2 + Project 3 + LlmRouter 14)', () => {
     // Guard-rail: keep the inventory aligned with `specs/managed-agents-api.md`
     // §Endpoint 清单. If a future contributor adds or removes an endpoint
     // they must also update REQUIRED_ENDPOINTS here — otherwise the
@@ -123,7 +123,7 @@ describe('validate-openapi — real spec smoke', () => {
     //
     // The 5 Run operations include the SSE events GET; the SSE
     // content-type check asserts its shape separately.
-    expect(REQUIRED_ENDPOINTS).toHaveLength(26);
+    expect(REQUIRED_ENDPOINTS).toHaveLength(40);
   });
 });
 

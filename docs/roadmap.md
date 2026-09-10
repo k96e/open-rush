@@ -212,7 +212,7 @@ Control Worker
 - [x] SSE② endpoint
 - [x] Minimal credential layer — encrypted storage + scoped injection (before full Vault)
 - [x] Minimal RBAC — Owner/Member roles + unified auth guard across 3 layers
-- [ ] AI Provider resilience — fallback chain, budget limit, timeout, rate control
+- [x] AI Provider resilience — budget limit, timeout, rate control (`apps/llm-router`, M5/M6; see [`docs/llm-router.md`](./llm-router.md)). **Fallback chain still open** — `llm_models.priority` is reserved but the gateway does not switch providers on failure.
 
 **Tests:** ~1,500
 
@@ -250,7 +250,7 @@ Control Worker
 
 - [ ] Enhanced observability — full OTEL spans + metrics + cost dashboard
 - [ ] LLM Tracing
-- [ ] Rate limiting (Redis)
+- [x] Rate limiting (Redis) — `RouterRateLimiter` in `apps/llm-router`, sliding window + `Retry-After`; degrades to allow when Redis is unreachable (capacity protection, not a security boundary)
 - [ ] RBAC enhancement (fine-grained roles, audit logs)
 - [ ] Documentation site
 - [x] E2E tests (Playwright)
@@ -336,5 +336,5 @@ platform_tokens  hashed, expirable
 | Test coverage ambitious | Incremental targets per milestone; prioritize critical paths |
 | Pause/Resume state loss | Checkpoint mechanism + recovery protocol |
 | Stream duplicate/out-of-order | Idempotency key + sequence protocol from M0 |
-| AI provider outage / cost spike | Fallback chain + budget limit + timeout from M1 |
+| AI provider outage / cost spike | Budget limit + timeout + rate control shipped in `apps/llm-router` (per-call `llm_calls` metering, `llm_budgets` observe/enforce). Fallback chain still open. |
 | Credential leakage via prompt injection | Vault encrypted storage + output sanitizer + network egress deny; optional Credential Proxy enhancement |

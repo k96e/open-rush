@@ -1,0 +1,13 @@
+{
+  "model": "acc-passthrough",
+  "max_tokens": 64,
+  "stream": true,
+  "system": "You are a terse assistant. 请只用一句话回答。",
+  "messages": [
+    {
+      "role": "user",
+      "content": [{ "type": "text", "text": "1+1=? 用中文回答，并带上一个 emoji 🚀" }]
+    }
+  ],
+  "metadata": { "user_id": "acceptance-fixture" }
+}

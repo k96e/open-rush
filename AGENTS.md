@@ -89,6 +89,10 @@ OpenRush 是企业级 AI Agent 基础设施平台——自托管、多场景、�
 | SSE① 流式输出                  |            |                       | ✅                   |
 | 断点恢复（restore）              |            | ✅ + ✅                 |                     |
 
+另有第 4 个 app：`apps/llm-router`（Hono :8790）——**所有 LLM 调用的统一出口**，夹在 Claude Code CLI 与供应商之间。
+改「模型路由 / 供应商密钥 / 逐调用计量 / 预算与限流 / 跨协议翻译」时动它，运维见 [`docs/llm-router.md`](docs/llm-router.md)。
+它是**可选依赖**：`LLM_ROUTER_BASE_URL` 不下发时 `RunOrchestrator` 行为与改造前完全一致。
+
 
 
 | 你要改的东西                             | 改哪个 package            |
@@ -103,6 +107,7 @@ OpenRush 是企业级 AI Agent 基础设施平台——自托管、多场景、�
 | Skill 安装/管理                        | packages/skills        |
 | MCP server/client                  | packages/mcp           |
 | 跨会话记忆                              | packages/memory        |
+| 模型路由网关（目录/凭据盲写/计量/预算限流/协议翻译）        | packages/llm-router    |
 
 
 ## Monorepo Structure
@@ -112,7 +117,8 @@ open-rush/
 ├── apps/
 │   ├── web/              # Next.js 16 前端 + Control API
 │   ├── control-worker/   # pg-boss 任务编排 + RunStateMachine
-│   └── agent-worker/     # Hono HTTP server（沙箱内 AI 执行）
+│   ├── agent-worker/     # Hono HTTP server（沙箱内 AI 执行）
+│   └── llm-router/       # Hono :8790 统一模型路由网关（唯一持有供应商密钥的进程）
 │
 ├── packages/
 │   ├── contracts/        # Zod schema + 枚举 + 状态机（零运行时依赖）
@@ -124,9 +130,11 @@ open-rush/
 │   ├── integrations/     # Git、OSS、Auth 外部服务
 │   ├── skills/           # Agent Skill 系统
 │   ├── mcp/              # Model Context Protocol server/client
-│   └── memory/           # 跨会话 Agent 记忆（pgvector 向量搜索）
+│   ├── memory/           # 跨会话 Agent 记忆（pgvector 向量搜索）
+│   └── llm-router/       # 网关库层（sealed box、目录、计量、预算、协议翻译）
 │
 ├── docker/               # Docker Compose（PG + Redis）
+├── e2e/                  # 端到端套件（含 llm-router 的 A1–A11 验收自证）
 ├── specs/                # 行为契约 Spec（GWT 格式）
 ├── AGENTS.md             # ← 你正在读的文件
 └── CLAUDE.md             # 快速参考（指向本文件）
@@ -142,6 +150,11 @@ contracts（根，零依赖）
    └→ control-worker（→ control-plane, sandbox, db, stream, integrations）
 
 agent-worker（→ contracts, agent-runtime, hono）
+
+llm-router（库）→ contracts, db, agent-runtime（只取 RedisRateLimiter）
+├→ llm-router（app，从 `.` 入口，**唯一装载私钥的进程**）
+├→ web（只从 `./sealing` 与 `./store` 两个子路径——产物里物理上没有解封代码）
+└→ control-plane（只从 `./token` 子路径——只要铸造与哈希）
 ```
 
 ## Run 生命周期（15 状态状态机）
@@ -326,6 +339,7 @@ workflow review-code <task-id>
 ```
 specs/
 ├── contracts.md     — Zod schema 设计决策（枚举定义、状态机、验证规则）
+├── llm-router.md    — 模型路由网关（密钥边界、目录热变更、双协议面、计量与闸门）
 └── stream.md        — Redis SSE 流设计（StreamRegistry API、Redis 配置模式）
 ```
 

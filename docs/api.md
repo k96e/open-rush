@@ -37,7 +37,7 @@ The definitive per-endpoint scope table lives in [`specs/service-token-auth.md` 
 
 ---
 
-## Endpoint index (24 endpoints)
+## Endpoint index (40 endpoints)
 
 | Group | Method + Path | Scope | Implementation |
 | --- | --- | --- | --- |
@@ -67,6 +67,30 @@ The definitive per-endpoint scope table lives in [`specs/service-token-auth.md` 
 | **Project** (3) | `POST   /api/v1/projects` | `projects:write` | 同上 |
 | | `GET    /api/v1/projects` | `projects:read` | 同上 |
 | | `GET    /api/v1/projects/:id` | `projects:read` | 同上 |
+| **LlmRouter** (14) | `POST   /api/v1/llm/credentials` | `llm:write` + session-only | `apps/web/app/api/v1/llm/credentials/route.ts` |
+| | `GET    /api/v1/llm/credentials` | `llm:read` + session-only | 同上 |
+| | `DELETE /api/v1/llm/credentials/:id` | `llm:write` + session-only | `apps/web/app/api/v1/llm/credentials/[id]/route.ts` |
+| | `POST   /api/v1/llm/credentials/:id/rotate` | `llm:write` + session-only | `apps/web/app/api/v1/llm/credentials/[id]/rotate/route.ts` |
+| | `POST   /api/v1/llm/providers` | `llm:write` + session-only | `apps/web/app/api/v1/llm/providers/route.ts` |
+| | `GET    /api/v1/llm/providers` | `llm:read` + session-only | 同上 |
+| | `GET    /api/v1/llm/providers/:id` | `llm:read` + session-only | `apps/web/app/api/v1/llm/providers/[id]/route.ts` |
+| | `PATCH  /api/v1/llm/providers/:id` | `llm:write` + session-only | 同上 |
+| | `DELETE /api/v1/llm/providers/:id` | `llm:write` + session-only | 同上 |
+| | `POST   /api/v1/llm/models` | `llm:write` + session-only | `apps/web/app/api/v1/llm/models/route.ts` |
+| | `GET    /api/v1/llm/models` | `llm:read` + session-only | 同上 |
+| | `GET    /api/v1/llm/models/:id` | `llm:read` + session-only | `apps/web/app/api/v1/llm/models/[id]/route.ts` |
+| | `PATCH  /api/v1/llm/models/:id` | `llm:write` + session-only | 同上 |
+| | `DELETE /api/v1/llm/models/:id` | `llm:write` + session-only | 同上 |
+
+> The **LlmRouter** group is the gateway's *console*: it configures credentials, upstream
+> providers and model aliases. The gateway's **inference** surface (`/v1/messages`,
+> `/v1/chat/completions` on `apps/llm-router:8790`) is deliberately **not** part of this
+> contract — it is the provider's native protocol and we promise byte-for-byte
+> passthrough, so redescribing it here would only create a second source of truth that
+> drifts. See [`docs/llm-router.md`](./llm-router.md).
+>
+> All 14 are **session-only**: platform-scoped resources reject service tokens even when
+> the scope matches, same rule as `POST /api/v1/auth/tokens`.
 
 ---
 

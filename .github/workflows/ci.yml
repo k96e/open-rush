@@ -14,6 +14,24 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: postgresql://rush:rush@localhost:5432/rush
+
+    # PGlite 是 PG17，证明不了部署目标（PG16 + pgvector）。migration 重放与
+    # 集成测试必须打真的 pg16——`specs/migration-policy.md` §CI Gate 要求的就是这个。
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: rush
+          POSTGRES_USER: rush
+          POSTGRES_PASSWORD: rush
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rush -d rush"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
     steps:
       - uses: actions/checkout@v6
 
@@ -29,14 +47,28 @@ jobs:
 
       - name: Build
         run: |
+          # apps/web 在 `next build` 的 collect-page-data 阶段会实例化 DB client，
+          # 而 turbo.json 的 build task 没有声明 env passthrough——Next 只能从
+          # apps/web/.env 读。该文件被 .gitignore，所以 CI 要自己造一份。
           echo "DATABASE_URL=postgresql://rush:rush@localhost:5432/rush" >> apps/web/.env
           pnpm build
 
       - name: Type check
         run: pnpm check
 
+      - name: Lint
+        run: pnpm lint
+
       - name: Validate OpenAPI spec
         run: pnpm validate:openapi
 
       - name: Test
         run: pnpm test
+
+      # 干净的 pg16 上重放全部 migration，再跑需要真 PG 的集成测试
+      # （pgvector、连接池、LISTEN/NOTIFY）。
+      - name: Apply migrations on a clean pg16
+        run: pnpm --filter @open-rush/db db:migrate
+
+      - name: Integration tests
+        run: pnpm test:integration

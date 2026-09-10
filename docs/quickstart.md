@@ -1,6 +1,7 @@
 # Quickstart
 
 Get an OpenRush instance running, create an AgentDefinition, and stream a live Agent run — in three steps.
+Step 4 is optional: route every model call through the `llm-router` gateway.
 
 Target runtime: Node.js 22+, pnpm 10+, Docker + Docker Compose. Estimated time: ~5 minutes.
 
@@ -169,6 +170,54 @@ curl -X POST "$OPENRUSH_BASE/api/v1/agents/<agentId>/runs/<runId>/cancel" \
 
 ---
 
+## 4. Route all model calls through llm-router (optional)
+
+By default `apps/agent-worker` talks to the provider directly with whatever
+`ANTHROPIC_API_KEY` it finds in its own environment. Turning on `llm-router` puts a thin
+gateway between Claude Code and the provider, so that provider keys never leave one
+process, every call is metered, and budgets/rate limits become enforceable.
+
+It is a **fully optional dependency**: with `LLM_ROUTER_BASE_URL` unset, `RunOrchestrator`
+behaves exactly as before.
+
+```bash
+# 1. Generate the X25519 key pair (once). Public key -> web, private key -> llm-router.
+#    Never put both on the same service.
+pnpm llm:keygen
+
+# 2. apps/web/.env.local
+#    LLM_ROUTER_PUBLIC_KEY=<base64 of the SPKI PEM>
+
+# 3. Start the gateway (private key only here)
+LLM_ROUTER_PRIVATE_KEY_FILE=/path/to/router.key \
+DATABASE_URL=postgresql://rush:rush@localhost:5432/rush \
+pnpm --filter @open-rush/llm-router-service dev      # :8790
+
+# 4. apps/control-worker/.env.local
+#    LLM_ROUTER_BASE_URL=http://localhost:8790
+```
+
+Then register a credential, a provider and a model alias through the console API
+(`/api/v1/llm/credentials`, `/providers`, `/models`). The credential is **sealed in the
+browser-facing service with the public key** — the plaintext never reaches the database,
+the logs, or any API response.
+
+From here on each run gets a short-lived `rt_…` token injected as `ANTHROPIC_AUTH_TOKEN`,
+revoked when the run converges. Verify with:
+
+```bash
+psql "$DATABASE_URL" -c "SELECT model_alias, status, tokens_in, tokens_out, cost_usd FROM llm_calls ORDER BY started_at DESC LIMIT 5;"
+```
+
+> ⚠️ In dev mode the sandbox env has **two** paths and changing only one makes it look like
+> the gateway is not in effect. Also clear `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` from
+> `apps/agent-worker/.env.local`, otherwise the child process bypasses the gateway.
+
+Full operations guide: [`docs/llm-router.md`](./llm-router.md).
+Acceptance evidence (A1–A11): [`docs/llm-router-acceptance.md`](./llm-router-acceptance.md).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -178,6 +227,9 @@ curl -X POST "$OPENRUSH_BASE/api/v1/agents/<agentId>/runs/<runId>/cancel" \
 | `503` on every `/api/v1/*` call | Feature flag `OPENRUSH_V1_ENABLED` is off. Set it to `true` in `apps/web/.env.local`. |
 | SSE immediately closes after replay | `runs.status` already reached a state-machine terminal (`completed` / `failed`; wire shows `cancelled` for user-cancels). Spec: terminal runs full-replay then close — not a bug. |
 | Agent worker can't reach Claude | Verify `ANTHROPIC_API_KEY` / Bedrock creds in `apps/agent-worker/.env.local`. |
+| Gateway returns `500 credential '…' cannot be unsealed` | The private key on `llm-router` does not pair with the public key used at credential entry. Compare `llm_credentials.key_id` with the `keyId` in the gateway's startup log. |
+| Gateway returns `404 model '…' not found` right after a catalog edit | The write path forgot `bumpCatalogVersion`. Fallback: wait `LLM_CATALOG_POLL_MS` (default 5s). |
+| Runs still hit the provider directly after enabling the gateway | `LLM_ROUTER_BASE_URL` unset (control-worker logs a warning), or `apps/agent-worker/.env.local` still carries `ANTHROPIC_BASE_URL`. |
 
 ---
 
@@ -187,4 +239,6 @@ curl -X POST "$OPENRUSH_BASE/api/v1/agents/<agentId>/runs/<runId>/cancel" \
 - [`specs/managed-agents-api.md`](../specs/managed-agents-api.md) — binding contract, status codes, E2E scenarios.
 - [`specs/service-token-auth.md`](../specs/service-token-auth.md) — scopes, rotation, revocation.
 - [`specs/agent-definition-versioning.md`](../specs/agent-definition-versioning.md) — PATCH semantics and `If-Match`.
+- [`docs/llm-router.md`](./llm-router.md) — gateway deployment, key rotation, catalog config, troubleshooting.
+- [`specs/llm-router.md`](../specs/llm-router.md) — gateway design decisions (source of truth).
 - TypeScript SDK (`@open-rush/sdk`) — ships alongside OpenAPI spec once task-16 lands; see the package README.

@@ -51,11 +51,11 @@ export interface EndpointSpec {
  * Canonical endpoint inventory. Keep this list aligned with
  * `specs/managed-agents-api.md` §Endpoint 清单 whenever new endpoints land.
  *
- * 26 operations in total — one of them (`GET /events`) is the SSE stream,
+ * 40 operations in total — one of them (`GET /events`) is the SSE stream,
  * which the `checkSseContentType` pass verifies separately. The spec
- * prose occasionally says "24" — that predates the Project + Registry
- * additions; the Zod contracts in `packages/contracts/src/v1/*.ts` are
- * the source of truth and cover all 26.
+ * prose occasionally says "24" or "26" — that predates the Project /
+ * Registry / LLM Router additions; the Zod contracts in
+ * `packages/contracts/src/v1/*.ts` are the source of truth and cover all 40.
  */
 export const REQUIRED_ENDPOINTS: EndpointSpec[] = [
   // Auth (3)
@@ -91,6 +91,24 @@ export const REQUIRED_ENDPOINTS: EndpointSpec[] = [
   { path: '/api/v1/projects', op: 'post' },
   { path: '/api/v1/projects', op: 'get' },
   { path: '/api/v1/projects/{id}', op: 'get' },
+  // LLM Router console (14) — 目录 / 凭据的控制面，全部 session-only。
+  // 推理面（apps/llm-router 的 /v1/messages、/v1/chat/completions）**刻意不在
+  // 这份契约里**：那是供应商的原生协议，我们承诺的是逐字节透传，
+  // 重新描述一遍只会让两边迟早对不上。
+  { path: '/api/v1/llm/credentials', op: 'post' },
+  { path: '/api/v1/llm/credentials', op: 'get' },
+  { path: '/api/v1/llm/credentials/{id}', op: 'delete' },
+  { path: '/api/v1/llm/credentials/{id}/rotate', op: 'post' },
+  { path: '/api/v1/llm/providers', op: 'post' },
+  { path: '/api/v1/llm/providers', op: 'get' },
+  { path: '/api/v1/llm/providers/{id}', op: 'get' },
+  { path: '/api/v1/llm/providers/{id}', op: 'patch' },
+  { path: '/api/v1/llm/providers/{id}', op: 'delete' },
+  { path: '/api/v1/llm/models', op: 'post' },
+  { path: '/api/v1/llm/models', op: 'get' },
+  { path: '/api/v1/llm/models/{id}', op: 'get' },
+  { path: '/api/v1/llm/models/{id}', op: 'patch' },
+  { path: '/api/v1/llm/models/{id}', op: 'delete' },
 ];
 
 /** All 8 error codes from `packages/contracts/src/v1/common.ts` `ErrorCode`. */

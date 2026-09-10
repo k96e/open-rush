@@ -1,0 +1,300 @@
+{
+  "generatedAt": "2026-09-10T08:09:42.209Z",
+  "elapsedSec": 55,
+  "counts": {
+    "pass": 8,
+    "partial": 3,
+    "fail": 0,
+    "ok": true
+  },
+  "results": [
+    {
+      "id": "A1",
+      "title": "请求/响应透传语义（body 零改写 + SSE 不丢不改序）",
+      "verdict": "pass",
+      "detail": "passthrough 请求/响应双向逐字节一致；rewrite-model 只动 $.model；translate 语义等价",
+      "evidence": [
+        "OK   passthrough 调用返回 200（实际 200）",
+        "OK   上游收到的请求体与调用方发出的**逐字节相同**（347 B，首个差异下标 -1）",
+        "OK   响应体与上游 fixture **逐字节相同**（977 B）",
+        "OK   query 原样带到上游（实际 /v1/messages?beta=true）",
+        "OK   从未见过的 anthropic-beta 值原样到达上游 → 走的是开放列表而不是白名单",
+        "OK   上游收到的是解封后的供应商真 key，而不是调用方的 router 令牌",
+        "OK   rewrite-model 调用返回 200（实际 200）",
+        "OK   除 $.model 外，解析后深度相等（含多字节字符）",
+        "OK   $.model 被改写为目录里的 upstreamModel（实际 fake-anthropic-upstream）",
+        "OK   translate 调用返回 200（实际 200）",
+        "OK   跨协议时打到上游的是 OpenAI 端点（实际 /v1/chat/completions）",
+        "OK   Anthropic 的 system 被摊平成 OpenAI 的 system message",
+        "OK   回给调用方的是 Anthropic 形状的事件序列（message_start → content_block_start → content_block_delta → content_block_delta …）",
+        "--   translate 档**不承诺字节一致**，只承诺语义等价——有损清单见 ref/R9 §9.6"
+      ],
+      "tradeoff": "① 向上游发 `accept-encoding: identity`；上游若强制 gzip，下游拿到的仍是同样的字节（字节一致成立），但 usage 旁路解析会失败并记 tokens=0，该次调用降级为只进 run 级聚合。② translate 档只交付 Anthropic-in → OpenAI-out 一个方向，反方向与 count_tokens 仍回 404；10 条有损项见 ref/R9 §9.6。"
+    },
+    {
+      "id": "A2",
+      "title": "转发性能（p95 附加延迟，TTFB 与总耗时分开报）",
+      "verdict": "partial",
+      "detail": "ΔTTFB p95 ≤ 117.65 ms，Δ总耗时 p95 ≤ 117.66 ms（n=200，并发 1,8,32）",
+      "evidence": [
+        "OK   bench 脚本产出了结果",
+        "--   并发 1：ΔTTFB p95 = 2.77 ms，Δ总耗时 p95 = 3.30 ms，错误 0",
+        "OK   并发 1 下零错误",
+        "--   并发 8：ΔTTFB p95 = 24.83 ms，Δ总耗时 p95 = 24.89 ms，错误 0",
+        "OK   并发 8 下零错误",
+        "--   并发 32：ΔTTFB p95 = 117.65 ms，Δ总耗时 p95 = 117.66 ms，错误 0",
+        "OK   并发 32 下零错误",
+        "OK   并发 1 的 ΔTTFB p95 < 15 ms（实际 2.77 ms）— 这是网关本身的开销",
+        "~~   并发 8/32 的 ΔTTFB p95 超过 15 ms（最差 117.65 ms）：本机 4 核上，客户端 / 网关 / 假上游三个 Node 进程抢同一批 CPU，而直连档只有两个进程——高并发下比的已经不是「网关多花多少」而是「多一个进程要多抢多少 CPU」。结论按 D11 处理：网关无状态、横向扩副本；单副本的饱和点要在目标机型上单独压。"
+      ],
+      "tradeoff": "① 本机、无 TLS、假上游；不含跨主机网络与 TLS 握手。② 15 ms 的目标按**并发 1** 判定——那是网关本身的开销；并发档位测的是单副本饱和曲线，且三个进程共享同一批 CPU，数值只在同机型同口径下可比。③ 非流式请求会在网关侧完整缓冲 body（为解析 usage）——大响应多一次内存拷贝；Claude Code 走的是流式路径，无此开销。",
+      "metrics": {
+        "c1.deltaTtfbP95Ms": "2.77",
+        "c1.deltaTotalP95Ms": "3.30",
+        "c1.directTtfbP95Ms": "1.24",
+        "c1.gatewayTtfbP95Ms": "4.01",
+        "c1.directTotalP95Ms": "1.29",
+        "c1.gatewayTotalP95Ms": "4.59",
+        "c8.deltaTtfbP95Ms": "24.83",
+        "c8.deltaTotalP95Ms": "24.89",
+        "c8.directTtfbP95Ms": "7.34",
+        "c8.gatewayTtfbP95Ms": "32.17",
+        "c8.directTotalP95Ms": "7.35",
+        "c8.gatewayTotalP95Ms": "32.24",
+        "c32.deltaTtfbP95Ms": "117.65",
+        "c32.deltaTotalP95Ms": "117.66",
+        "c32.directTtfbP95Ms": "27.20",
+        "c32.gatewayTtfbP95Ms": "144.84",
+        "c32.directTotalP95Ms": "27.21",
+        "c32.gatewayTotalP95Ms": "144.88",
+        "cpus": 4,
+        "loadavg1": 0.42,
+        "worstDeltaTtfbP95Ms": "117.65",
+        "worstDeltaTotalP95Ms": "117.66"
+      }
+    },
+    {
+      "id": "A3",
+      "title": "可用性（滚动更新不中断）",
+      "verdict": "pass",
+      "detail": "SIGTERM → readyz 立刻 503 → 在途流跑完 → 零 5xx",
+      "evidence": [
+        "OK   SIGTERM 后 readyz 立刻 503（实际 503）",
+        "OK   摘流期间的在途流正常收尾，字节与 fixture 完全一致（没有被截断）",
+        "OK   持续负载确实跑起来了（504 次请求）",
+        "OK   全程零 5xx / 零连接失败（异常 0 次）",
+        "OK   被摘流的副本在 drain 窗口后干净退出（exit 0）"
+      ],
+      "tradeoff": "单个流的最长时长可能超过 drain 窗口（默认 30 s），超时后会被强制断开。缓解：把 DRAIN_TIMEOUT_MS 配成大于典型 run 的单次调用时长，K8s 侧同步放大 terminationGracePeriodSeconds。本项用的是「每请求查 readyz」的极简 LB，与真实 ingress 的周期性探针相比更严格（真实探针有 periodSeconds 的滞后，会多丢几个请求到正在排空的副本上——这正是 drain 窗口存在的理由）。",
+      "metrics": {
+        "requestsDuringRollout": 504,
+        "fiveXX": 0
+      }
+    },
+    {
+      "id": "A4",
+      "title": "路由准确率（100% / 未知 404）",
+      "verdict": "pass",
+      "detail": "12 条目录 + 3 个不存在的 alias 全部命中预期；404 不枚举、白名单先于路由",
+      "evidence": [
+        "OK   acc-passthrough → 200（passthrough；实际 200）",
+        "OK   acc-passthrough 落到上游 /v1/messages（实际 /v1/messages）",
+        "OK   acc-passthrough 的上游模型名为 acc-passthrough（实际 acc-passthrough）",
+        "OK   acc-rewrite → 200（rewrite-model；实际 200）",
+        "OK   acc-rewrite 落到上游 /v1/messages（实际 /v1/messages）",
+        "OK   acc-rewrite 的上游模型名为 fake-anthropic-upstream（实际 fake-anthropic-upstream）",
+        "OK   acc-openai → 200（跨协议 translate；实际 200）",
+        "OK   acc-openai 落到上游 /v1/chat/completions（实际 /v1/chat/completions）",
+        "OK   acc-openai 的上游模型名为 acc-openai（实际 acc-openai）",
+        "OK   acc-openai-rewrite → 200（跨协议 translate + 异名；实际 200）",
+        "OK   acc-openai-rewrite 落到上游 /v1/chat/completions（实际 /v1/chat/completions）",
+        "OK   acc-openai-rewrite 的上游模型名为 fake-openai-upstream（实际 fake-openai-upstream）",
+        "OK   acc-tied → 200（priority 并列 → 按 id 升序取第一条（本 fixture 里落在 anthropic 那条）；实际 200）",
+        "OK   acc-priority → 200（priority 小者胜出；实际 200）",
+        "OK   acc-priority 的上游模型名为 winner（实际 winner）",
+        "OK   acc-disabled → 404（enabled=false 等价于不存在；实际 404）",
+        "OK   acc-disabled-only → 404（只有 disabled 候选；实际 404）",
+        "OK   acc-nope-1 → 404（目录里没有；实际 404）",
+        "OK   acc-nope-2 → 404（目录里没有；实际 404）",
+        "OK   acc-ghost → 404（目录里没有；实际 404）",
+        "OK   并列 priority 的两条候选中确定性地选中了一条（实际 tied-a）",
+        "OK   404 错误体回显被请求的 alias",
+        "OK   404 错误体不枚举目录里的其它模型名（命中 无）",
+        "OK   令牌白名单外的 alias 回 403（实际 403）"
+      ],
+      "tradeoff": "并列 priority 的胜者由 (priority, id) 决定，id 是 uuid → 对运维而言等价于「不要靠并列 priority 表达偏好」。本项断言的是**确定性**（同一目录下每次选同一条），不是「选中某一条特定的 provider」。"
+    },
+    {
+      "id": "A5",
+      "title": "明细计量（逐调用 + subject + 与 run 级对账）",
+      "verdict": "pass",
+      "detail": "逐调用 3 行 ↔ run 级聚合 ↔ run_events 事件三方对账一致；归属只认令牌",
+      "evidence": [
+        "OK   llm_calls 行数 == 该 run 的实际上游调用次数（3 vs 3）",
+        "OK   假上游侧计数一致（3）",
+        "OK   三条都记为 success / 200（实际 success/200 success/200 success/200）",
+        "OK   归属列（run/project）全部来自令牌",
+        "OK   伪造的 x-claude-code-session-id 只进 cc_session_id，run_id 仍来自令牌（cc=forged-0368f07d-not-a-run-id，run=0368f07d-bdda-4566-9de6-6e947ab73958）",
+        "OK   五类 token 按 fixture 逐项落库（in=1200 cw=300 cr=900 out=42）",
+        "OK   Anthropic 上游的 tokens_reasoning 恒为 0（协议层不可拆，见取舍）",
+        "OK   按定点十进制计价（单次 1.749000 USD）",
+        "OK   沙箱 env 已被记录（供 A9/A11 复用）",
+        "OK   aggregateUsage 出数",
+        "OK   SUM(tokens_in + cache_write + cache_read) 与聚合一致（7200 vs 7200）",
+        "OK   SUM(tokens_out) 与聚合一致（126 vs 126）",
+        "OK   SUM(cost_usd) 与聚合一致（5.247 vs 5.247000）",
+        "OK   run_events 里恰好一条 data-openrush-usage（1 条）",
+        "OK   事件载荷与 llm_calls 的 SUM 对得上（in=7200 out=126）",
+        "OK   DB 停掉后调用仍成功返回（实际 200）"
+      ],
+      "tradeoff": "① **Anthropic 族的推理 token 在协议层面不可拆**——thinking token 已计入 output_tokens，wire 上没有独立字段，因此 tokens_reasoning 对 Anthropic 上游恒为 0；能拆的是 cache read / cache write / output 三项。OpenAI 族可从 completion_tokens_details.reasoning_tokens 拆出。② run 级 `data-openrush-usage` 受 `OPENRUSH_V1_EVENTS_ENABLED` 控制且**默认关闭**（只认字面量 \"true\"）；关闭时 llm_calls 照常写入——逐调用计量不依赖这个 flag。",
+      "metrics": {
+        "llmCallsRows": 3,
+        "runLevelTokensIn": 7200,
+        "runLevelCostUsd": 5.247
+      }
+    },
+    {
+      "id": "A6",
+      "title": "预算 / 限流（两开关独立）",
+      "verdict": "pass",
+      "detail": "限流 3/5 + Retry-After；预算 observe 放行照记、enforce 回 429；两开关各自独立",
+      "evidence": [
+        "OK   限流开（rpm=3）：前 3 次 200（实际 3 次 200）",
+        "OK   后 2 次 429（实际 2 次）",
+        "OK   429 一律带 Retry-After（实际 60）",
+        "OK   错误体的 error.type = rate_limit_error",
+        "OK   限流关：5 次全 200（实际 200,200,200,200,200）— 开关关掉那一道确实没装配",
+        "OK   预算 observe 档超限仍放行（实际 200）",
+        "OK   llm_budget_usage.cost_usd 持续累加（2059.299 → 2075.04）— 累加在与闸门解耦的旁路上",
+        "OK   预算 enforce 档超限回 429（实际 429）",
+        "OK   429 带 Retry-After（实际 57054）",
+        "OK   错误信息含 used/limit 与 window（{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"budget exceeded for project 54c0534e-123e-42fe-8901-06870294626e: 2075.04/0.000001 USD (window=day)\"}}）",
+        "OK   预算已超限、限流桶也已满，但两道都关掉的副本仍 5 次全 200（实际 200,200,200,200,200）",
+        "OK   预算超限**不影响**只开限流那台的判定依据（它仍按限流回 429，实际 429）",
+        "--   四种组合下「关掉的那一道一次都不被调用」由 apps/llm-router 的 gates.test.ts 用调用计数钉死"
+      ],
+      "tradeoff": "① 预算是**软限额**：本项为了可测把 LLM_ROUTER_BUDGET_CACHE_MS 设成 0，生产默认 10 s 缓存，高并发下会超出少量；要硬限额就设 0，代价是每次调用一次同步 DB 读。② 限流复用 RedisRateLimiter，Redis 不可达时**降级放行**（可用性优先）——因此限流是容量保护，不是安全边界。③ 「控制面把网关 429 映射为 RATE_LIMITED」需要 apps/web 起着，本次未测。"
+    },
+    {
+      "id": "A7",
+      "title": "目录热变更（NOTIFY + 轮询兜底两组数据）",
+      "verdict": "pass",
+      "detail": "NOTIFY 18 ms / 轮询兜底 1970 ms（poll=2000 ms）",
+      "evidence": [
+        "OK   NOTIFY 通路：新 alias 在不重启任何进程的情况下生效",
+        "OK   NOTIFY 传播时延 < 500 ms（实测 18 ms）",
+        "OK   轮询兜底：NOTIFY 缺席时同样会生效",
+        "OK   轮询兜底时延 ≤ LLM_CATALOG_POLL_MS + 一次 loadSnapshot（实测 1970 ms，poll=2000 ms）",
+        "--   生效时间上界 = max(NOTIFY 传播时延, LLM_CATALOG_POLL_MS) + 一次 loadSnapshot 耗时；两组数据一起给，才算证明了上界确定"
+      ],
+      "tradeoff": "轮询兜底这一组用「只 bump version、不发 pg_notify」来复现「NOTIFY 丢失 / LISTEN 断开」——比 kill 掉 LISTEN 后端连接更确定（postgres.js 会自动重连并重新订阅，kill 之后到底还收不收得到通知是竞态）。两者对副本而言不可区分：副本看到的都是「版本位变了但没人通知我」。",
+      "metrics": {
+        "notifyPropagationMs": 18,
+        "pollFallbackMs": 1970,
+        "pollIntervalMs": 2000
+      }
+    },
+    {
+      "id": "A8",
+      "title": "密钥热变更（不重启生效 + 旧密钥不可还原）",
+      "verdict": "pass",
+      "detail": "rotate 后不重启即生效；库内只留一份新密文，无历史表、无明文列",
+      "evidence": [
+        "OK   轮换前：上游收到旧 key",
+        "OK   轮换后**不重启任何进程**，上游收到的已是新 key",
+        "OK   version 递增（实际 2）",
+        "OK   rotated_at 已更新",
+        "OK   sealed_value 被覆盖",
+        "OK   无明文列（列：id, name, alg, key_id, sealed_value, auth_style, auth_header, version, created_by, created_at, updated_at, rotated_at）",
+        "OK   无历史密文表（llm_credentials）",
+        "OK   库里检索不到旧密钥明文",
+        "OK   库里检索不到新密钥明文",
+        "OK   网关日志里检索不到新密钥"
+      ],
+      "tradeoff": "**不保留历史密文**是设计选择（R4 §5.2）：轮换即覆盖，旧密钥从此不可还原。代价是「轮换后发现新 key 配错了」只能重新录入，没有一键回滚。生效时间与 A7 同源（目录版本位 + NOTIFY/轮询）。"
+    },
+    {
+      "id": "A9",
+      "title": "安全审计（探针 clean + 吊销流程）",
+      "verdict": "partial",
+      "detail": "5 处探针 clean；run 令牌随收敛吊销；手动吊销生效 ≤15 s（实测见 metrics）",
+      "evidence": [
+        "--   clean: sandbox env（run 真正拿到的那一份）",
+        "--   clean: database: llm_credentials",
+        "--   clean: log: llm-router（含清洗层）",
+        "--   clean: run_events 全量",
+        "--   clean: 控制台凭据 API 的序列化结果",
+        "OK   5 处探针全部 clean（明文与 base64 两种形态都查）",
+        "OK   网关日志里也没有 router 令牌明文（rt_… 在清洗模式里）",
+        "OK   A5 跑过的 run，其令牌在 finally 里被吊销（15 条 revoked）",
+        "OK   新令牌可用（并因此进了认证缓存）",
+        "OK   吊销后令牌最终失效（401）",
+        "OK   吊销生效 ≤ 认证缓存 TTL（实测 15.1 s，TTL 默认 15 s）",
+        "~~   「控制台 API 响应」这一处探针没有走真实 HTTP——本次未起 apps/web，改为对 DrizzleCredentialStore.list() 的序列化结果取样（路由 handler 就是把它 JSON 化）；route.test.ts 另有断言响应体不含 value/sealed_value",
+        "~~   「部署清单里私钥的分布」需要 kubectl，本机不可用；scripts/audit-no-plaintext-key.sh 里保留了该探针并会在跳过时列出来"
+      ],
+      "tradeoff": "**吊销生效是 ≤15 秒，不是「立即」**——TokenAuthenticator 有 15 s 的进程内缓存。要更强保证就把 LLM_ROUTER_TOKEN_TTL_MS 设为 0（每次查库，多约 1–2 ms），或由控制面主动调 invalidate()。审计脚本的「跳过」不等于「通过」，报告必须把跳过的探针列出来。",
+      "metrics": {
+        "revokeEffectiveMs": 15105
+      }
+    },
+    {
+      "id": "A10",
+      "title": "失败隔离（502 且不泄露）",
+      "verdict": "pass",
+      "detail": "连不上/超时 → 502 且不泄露地址与密钥；上游错误体原样透传；无共享阻塞队列",
+      "evidence": [
+        "OK   连不上上游 → 502（实际 502）",
+        "OK   502 错误体不含上游 host:port",
+        "OK   502 错误体不含上游 scheme+host",
+        "OK   502 错误体不含字面量 baseUrl",
+        "OK   502 错误体不含供应商密钥",
+        "OK   错误体只含供应商的 name（{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"provider 'acc-dead-52f023eb' is unavailable\"}}）",
+        "OK   上游 hang → 502（实际 502）",
+        "OK   在 provider 的 timeoutMs 内收尾（实测 3003 ms）",
+        "OK   上游 429 → 状态码照抄（实际 429）",
+        "OK   上游错误体原样透传，不包信封（实际 {\"upstream_says\":\"slow down\",\"quota\":{\"reset_in\":7}}）",
+        "OK   没有被网关自己的 429 信封替换",
+        "OK   非 JSON 的上游错误体也原样透传",
+        "OK   8 条请求卡在超时里的同时，健康路径 5 次全 200（实际 200,200,200,200,200）",
+        "OK   失败调用照样进 llm_calls（20 条 upstream_error）",
+        "--   错误码只进库不回显：UPSTREAM_FETCH_FAILED, UPSTREAM_TIMEOUT, UPSTREAM_HTTP_429, UPSTREAM_HTTP_500"
+      ],
+      "tradeoff": "「另一个供应商不受影响」在本次验收里两个 provider 指向的是同一个假上游进程（不同 baseUrl 会引入端口差异这个额外变量），因此证的是**网关侧没有共享阻塞队列**，不是「上游之间互不影响」——后者本来也不归网关管。真上游的故障注入不在本课题范围（不接现网）。",
+      "metrics": {
+        "upstreamTimeoutMs": 3003
+      }
+    },
+    {
+      "id": "A11",
+      "title": "盲写 + 唯一持有（含堆快照对照实验）",
+      "verdict": "partial",
+      "detail": "库内只有密文；web/control-plane 既无解封路径也无私钥（源码 + 构建产物 + 导出面三重）；沙箱只拿到 rt_ 短时令牌；经网关与直连逐字节一致",
+      "evidence": [
+        "OK   库里存的是密文",
+        "OK   对外的凭据摘要既不含 value 也不含密文",
+        "OK   apps/web + packages/control-plane 里没有解封调用点或私钥变量（命中：无）",
+        "OK   control-plane 的构建产物里 openSealed 命中 0 次",
+        "OK   control-plane 只从 `@open-rush/llm-router/token` 子路径引入（铸造+哈希，模块图里只有 node:crypto）",
+        "~~   router 侧堆快照里**也**没有明文：`--heapsnapshot-signal` 写快照前会做一次 full GC，而明文只活在 forward() 的栈上、组完请求头即断开引用（C4 §7.8），到不了快照里。这比 R6 预期的「router 命中」更强，但也意味着**堆快照不能用来证明「只有 router 能解」**——那一条的证据是 A8（rotate 后上游立刻收到新 key，只有持私钥的进程做得到）＋ 结构性 grep ＋ 构建产物三条。",
+        "OK   没有私钥的对照进程堆快照里 grep 不到明文",
+        "OK   对照进程确实读到了密文（是「拿到了东西但解不开」，不是「什么都没拿到」）",
+        "OK   web 侧用的 `@open-rush/llm-router/sealing` 入口**物理上没有** openSealed（导出面：SEALED_BOX_ALG, computeKeyId, generateRouterKeyPair, seal）",
+        "OK   对照进程的 env 里没有任何私钥材料",
+        "OK   两条路径都成功",
+        "OK   SSE 事件类型序列一致（message_start→content_block_start→ping→content_block_delta→content_block_delta→content_block_stop→message_delta→message_stop）",
+        "OK   最终文本一致（\"等于 2 🚀\"）",
+        "OK   并且逐字节一致",
+        "OK   沙箱 env 里没有供应商真 key",
+        "OK   沙箱 env 里有 ANTHROPIC_BASE_URL（指向网关）",
+        "OK   沙箱 env 里拿到的是 rt_ 前缀的短时令牌"
+      ],
+      "tradeoff": "① 对照组不是真的 apps/web 进程（起一个 Next.js server 只为取一次堆快照代价太高），而是一个**没有私钥、走 web 侧同一条代码路径**（读密文 + 只 import `@open-rush/llm-router/sealing`）的子进程。结论的力度来自 D3 的非对称设计本身：不是「我们约定不解」，而是「没有私钥就解不了」。② 私钥丢失是不可恢复的——唯一恢复路径是重新生成密钥对并重新录入全部供应商密钥（见 docs/llm-router.md）。",
+      "metrics": {
+        "routerHeapContainsPlaintext": "false",
+        "peerHeapContainsPlaintext": "false"
+      }
+    }
+  ]
+}

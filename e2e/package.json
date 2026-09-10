@@ -3,15 +3,24 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "lint": "biome check .",
+    "test": "vitest run --passWithNoTests",
+    "llm:acceptance": "tsx llm-router/acceptance.ts",
+    "llm:fake-upstream": "tsx llm-router/fake-upstream.ts"
+  },
   "dependencies": {
     "@open-rush/control-plane": "workspace:*",
     "@open-rush/db": "workspace:*",
+    "@open-rush/llm-router": "workspace:*",
     "@open-rush/sandbox": "workspace:*",
     "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
     "tsx": "^4.20.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "vitest": "^4.0.0"
   }
 }

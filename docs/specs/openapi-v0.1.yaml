@@ -69,6 +69,12 @@ tags:
     description: Skill + MCP registry read surface (2 endpoints)
   - name: Project
     description: Project minimal CRUD (3 endpoints)
+  - name: LlmRouter
+    description: |
+      LLM gateway console — credentials, upstream providers, model aliases
+      (14 endpoints, session-only). The inference surface itself
+      (`/v1/messages`, `/v1/chat/completions` on `apps/llm-router`) is the
+      provider's native protocol and is intentionally NOT redescribed here.
 
 security:
   - serviceToken: []
@@ -851,6 +857,340 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------------------
+  # LLM Router console (14) — 目录 / 凭据的控制面。
+  #
+  # 全部 **session-only**：这些是平台级资源，Service Token 即使带够 scope 也会被
+  # 拒（与 `POST /api/v1/auth/tokens` 同一条理由）。推理面（`/v1/messages`、
+  # `/v1/chat/completions`）不在本 spec 里——那是 `apps/llm-router` 对 Claude Code
+  # 暴露的 Anthropic / OpenAI 原生协议面，按定义与供应商逐字节一致，不该被我们
+  # 的契约重新描述一遍。见 `specs/llm-router.md`、`docs/llm-router.md`。
+  # ---------------------------------------------------------------------------
+
+  /api/v1/llm/credentials:
+    post:
+      tags: [LlmRouter]
+      summary: Register a provider credential (blind write)
+      description: |
+        The plaintext `value` is sealed **in this process** with the router's
+        X25519 public key (`LLM_ROUTER_PUBLIC_KEY`) before it ever reaches the
+        database. Only `apps/llm-router` holds the private key, so neither this
+        service nor the database can recover the plaintext afterwards.
+
+        The response is a structural projection that **cannot** carry `value`
+        or `sealedValue` — see `LlmCredential`.
+      operationId: createLlmCredential
+      x-required-scope: llm:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLlmCredentialRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmCredentialResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/VersionConflict' }
+    get:
+      tags: [LlmRouter]
+      summary: List provider credentials (never returns key material)
+      operationId: listLlmCredentials
+      x-required-scope: llm:read
+      parameters:
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListLlmCredentialsResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/llm/credentials/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceIdPath'
+    delete:
+      tags: [LlmRouter]
+      summary: Delete a provider credential
+      description: |
+        Rejected with `409` while any provider still references this credential
+        (`llm_providers.credential_id` is `ON DELETE RESTRICT`).
+      operationId: deleteLlmCredential
+      x-required-scope: llm:write
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteLlmResourceResponse'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/VersionConflict' }
+
+  /api/v1/llm/credentials/{id}/rotate:
+    parameters:
+      - $ref: '#/components/parameters/ResourceIdPath'
+    post:
+      tags: [LlmRouter]
+      summary: Rotate a provider credential
+      description: |
+        Overwrites `sealed_value`, bumps `version`, sets `rotated_at`, and bumps
+        the catalog version so live replicas pick it up without a restart.
+
+        **No historical ciphertext is kept** (design choice, see
+        `docs/llm-router.md` §5): the previous key is unrecoverable afterwards.
+      operationId: rotateLlmCredential
+      x-required-scope: llm:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RotateLlmCredentialRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmCredentialResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/llm/providers:
+    post:
+      tags: [LlmRouter]
+      summary: Create an upstream provider
+      operationId: createLlmProvider
+      x-required-scope: llm:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLlmProviderRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmProviderResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/VersionConflict' }
+    get:
+      tags: [LlmRouter]
+      summary: List upstream providers
+      operationId: listLlmProviders
+      x-required-scope: llm:read
+      parameters:
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+        - name: enabled
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListLlmProvidersResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/llm/providers/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceIdPath'
+    get:
+      tags: [LlmRouter]
+      summary: Get an upstream provider by id
+      operationId: getLlmProvider
+      x-required-scope: llm:read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmProviderResponse'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [LlmRouter]
+      summary: Update an upstream provider
+      description: |
+        At least one field is required — an empty patch is a meaningless write
+        that would still bump the catalog version and make every replica reload.
+      operationId: patchLlmProvider
+      x-required-scope: llm:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchLlmProviderRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmProviderResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/VersionConflict' }
+    delete:
+      tags: [LlmRouter]
+      summary: Delete an upstream provider
+      description: Cascades to the models that reference it (`ON DELETE CASCADE`).
+      operationId: deleteLlmProvider
+      x-required-scope: llm:write
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteLlmResourceResponse'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/llm/models:
+    post:
+      tags: [LlmRouter]
+      summary: Create a model alias
+      description: |
+        When `alias === upstreamModel` the gateway forwards the request body
+        **byte for byte** (passthrough). A differing `upstreamModel` triggers
+        `rewrite-model`, which is allowed to change exactly one field: `$.model`.
+      operationId: createLlmModel
+      x-required-scope: llm:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLlmModelRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmModelResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/VersionConflict' }
+    get:
+      tags: [LlmRouter]
+      summary: List model aliases
+      operationId: listLlmModels
+      x-required-scope: llm:read
+      parameters:
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+        - name: providerId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: enabled
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListLlmModelsResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/llm/models/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceIdPath'
+    get:
+      tags: [LlmRouter]
+      summary: Get a model alias by id
+      operationId: getLlmModel
+      x-required-scope: llm:read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmModelResponse'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [LlmRouter]
+      summary: Update a model alias
+      operationId: patchLlmModel
+      x-required-scope: llm:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchLlmModelRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmModelResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/VersionConflict' }
+    delete:
+      tags: [LlmRouter]
+      summary: Delete a model alias
+      operationId: deleteLlmModel
+      x-required-scope: llm:write
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteLlmResourceResponse'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
 
 components:
   # ---------------------------------------------------------------------------
@@ -2186,3 +2526,260 @@ components:
       required: [data]
       properties:
         data: { $ref: '#/components/schemas/Project' }
+
+    # --- LLM Router ---
+    LlmProtocol:
+      type: string
+      description: |
+        Upstream wire protocol. Cross-protocol calls go through the translate
+        path — currently Anthropic-in → OpenAI-out only.
+      enum: [anthropic, openai]
+
+    LlmAuthStyle:
+      type: string
+      description: |
+        How the provider key is presented upstream. `header` requires
+        `authHeader` to name the header.
+      enum: [bearer, x-api-key, header]
+
+    LlmCredential:
+      type: object
+      description: |
+        Structural projection of a provider credential. It CANNOT carry
+        `value` or `sealedValue` — that omission is the first gate of the key
+        boundary and is asserted in the route tests.
+      required: [id, name, alg, keyId, authStyle, authHeader, version, createdAt, updatedAt, rotatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        alg:
+          type: string
+          description: Sealing algorithm; currently only `x25519-hkdf-sha256-aes256gcm`.
+        keyId:
+          type: string
+          description: |
+            Fingerprint of the recipient public key. The gateway compares it at
+            startup and refuses to unseal on mismatch — a misconfigured key pair
+            fails loudly instead of silently.
+        authStyle: { $ref: '#/components/schemas/LlmAuthStyle' }
+        authHeader: { type: string, nullable: true }
+        version:
+          type: integer
+          minimum: 1
+          description: Rotation counter, starts at 1.
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        rotatedAt: { type: string, format: date-time, nullable: true }
+
+    CreateLlmCredentialRequest:
+      type: object
+      required: [name, value]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        value:
+          type: string
+          minLength: 8
+          maxLength: 8192
+          description: |
+            Provider key in plaintext. Sealed with the router public key before
+            storage — it exists only for the duration of this request and is
+            never echoed back, logged, or written to the database.
+        authStyle:
+          allOf: [{ $ref: '#/components/schemas/LlmAuthStyle' }]
+          default: bearer
+        authHeader:
+          type: string
+          maxLength: 64
+          description: Required when `authStyle` is `header`.
+
+    RotateLlmCredentialRequest:
+      type: object
+      required: [value]
+      properties:
+        value: { type: string, minLength: 8, maxLength: 8192 }
+
+    LlmCredentialResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/LlmCredential' }
+
+    ListLlmCredentialsResponse:
+      type: object
+      required: [data, nextCursor]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/LlmCredential' }
+        nextCursor: { $ref: '#/components/schemas/PaginationNextCursor' }
+
+    DeleteLlmResourceResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [id, deleted]
+          properties:
+            id: { type: string, format: uuid }
+            deleted: { type: boolean, enum: [true] }
+
+    LlmProvider:
+      type: object
+      required: [id, name, protocol, baseUrl, credentialId, defaultHeaders, timeoutMs, enabled, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        protocol: { $ref: '#/components/schemas/LlmProtocol' }
+        baseUrl:
+          type: string
+          format: uri
+          description: No trailing slash, e.g. `https://api.anthropic.com`.
+        credentialId: { type: string, format: uuid, nullable: true }
+        defaultHeaders:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            Fixed headers appended to every upstream request. Written AFTER the
+            caller's headers, so operator config wins on collisions.
+        timeoutMs: { type: integer, minimum: 1, maximum: 600000 }
+        enabled: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateLlmProviderRequest:
+      type: object
+      required: [name, protocol, baseUrl]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        protocol: { $ref: '#/components/schemas/LlmProtocol' }
+        baseUrl: { type: string, format: uri }
+        credentialId: { type: string, format: uuid, nullable: true }
+        defaultHeaders:
+          type: object
+          additionalProperties: { type: string }
+          default: {}
+        timeoutMs:
+          type: integer
+          minimum: 1
+          maximum: 600000
+          default: 600000
+          description: |
+            Default 10 minutes. Anything shorter than Claude Code's 300s byte
+            watchdog will kill long SSE streams prematurely.
+        enabled: { type: boolean, default: true }
+
+    PatchLlmProviderRequest:
+      description: All fields optional; at least one must be present.
+      allOf:
+        - $ref: '#/components/schemas/CreateLlmProviderRequest'
+      type: object
+      required: []
+      minProperties: 1
+
+    LlmProviderResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/LlmProvider' }
+
+    ListLlmProvidersResponse:
+      type: object
+      required: [data, nextCursor]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/LlmProvider' }
+        nextCursor: { $ref: '#/components/schemas/PaginationNextCursor' }
+
+    LlmModel:
+      type: object
+      required:
+        - id
+        - alias
+        - providerId
+        - upstreamModel
+        - priority
+        - enabled
+        - displayName
+        - maxOutputTokens
+        - priceInputPerMtok
+        - priceOutputPerMtok
+        - priceCacheWritePerMtok
+        - priceCacheReadPerMtok
+        - priceReasoningPerMtok
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: string, format: uuid }
+        alias:
+          type: string
+          description: |
+            Public model name. `alias === upstreamModel` selects the
+            byte-for-byte passthrough path.
+        providerId: { type: string, format: uuid }
+        upstreamModel: { type: string }
+        priority:
+          type: integer
+          description: |
+            Lower wins among candidates sharing an alias. Ties are broken by id
+            (a uuid) — deterministic, but do not use ties to express preference.
+        enabled: { type: boolean }
+        displayName: { type: string, nullable: true }
+        maxOutputTokens: { type: integer, minimum: 1, nullable: true }
+        priceInputPerMtok: { $ref: '#/components/schemas/LlmDecimalString' }
+        priceOutputPerMtok: { $ref: '#/components/schemas/LlmDecimalString' }
+        priceCacheWritePerMtok: { $ref: '#/components/schemas/LlmDecimalString' }
+        priceCacheReadPerMtok: { $ref: '#/components/schemas/LlmDecimalString' }
+        priceReasoningPerMtok: { $ref: '#/components/schemas/LlmDecimalString' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    LlmDecimalString:
+      type: string
+      description: |
+        Decimal as a string (USD per 1M tokens). PostgreSQL `numeric` maps to a
+        string in drizzle and the gateway prices with fixed-point arithmetic —
+        binary floats would accumulate rounding error across millions of calls.
+      pattern: '^-?[0-9]+(\.[0-9]+)?$'
+      example: '3.000000'
+
+    CreateLlmModelRequest:
+      type: object
+      required: [alias, providerId, upstreamModel]
+      properties:
+        alias: { type: string, minLength: 1, maxLength: 255 }
+        providerId: { type: string, format: uuid }
+        upstreamModel: { type: string, minLength: 1, maxLength: 255 }
+        priority: { type: integer, default: 0 }
+        enabled: { type: boolean, default: true }
+        displayName: { type: string, maxLength: 255, nullable: true }
+        maxOutputTokens: { type: integer, minimum: 1, nullable: true }
+        priceInputPerMtok: { allOf: [{ $ref: '#/components/schemas/LlmDecimalString' }], default: '0' }
+        priceOutputPerMtok: { allOf: [{ $ref: '#/components/schemas/LlmDecimalString' }], default: '0' }
+        priceCacheWritePerMtok: { allOf: [{ $ref: '#/components/schemas/LlmDecimalString' }], default: '0' }
+        priceCacheReadPerMtok: { allOf: [{ $ref: '#/components/schemas/LlmDecimalString' }], default: '0' }
+        priceReasoningPerMtok: { allOf: [{ $ref: '#/components/schemas/LlmDecimalString' }], default: '0' }
+
+    PatchLlmModelRequest:
+      description: All fields optional; at least one must be present.
+      allOf:
+        - $ref: '#/components/schemas/CreateLlmModelRequest'
+      type: object
+      required: []
+      minProperties: 1
+
+    LlmModelResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/LlmModel' }
+
+    ListLlmModelsResponse:
+      type: object
+      required: [data, nextCursor]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/LlmModel' }
+        nextCursor: { $ref: '#/components/schemas/PaginationNextCursor' }

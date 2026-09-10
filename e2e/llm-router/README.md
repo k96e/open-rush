@@ -62,6 +62,10 @@ ACC_DB_STOP_CMD='pg_ctlcluster 16 main stop'
 ACC_DB_START_CMD='pg_ctlcluster 16 main start'
 ```
 
+> ⚠️ 这一项**真的会把数据库停掉**。重启动作在 `finally` 里，但如果进程在 stop 与 start
+> 之间被 Ctrl-C / OOM 杀掉，数据库会一直停着——后面任何依赖它的命令（`pnpm test:integration`
+> 首当其冲）都会报 `ECONNREFUSED 127.0.0.1:5432`。手动起回来即可：`ACC_DB_START_CMD` 那条命令。
+
 ## 单独跑假上游
 
 ```bash
